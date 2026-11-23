@@ -1,22 +1,28 @@
 name: build-apk
 
+# 只做一件事：把 out/ 塞进 Capacitor 工程，出一个 APK。
+# 配了签名 Secrets 就出签名包，没配就出未签名包（不失败）。
+#
+# 注意：`secrets` 上下文**不能**出现在 `if:` 里（工作流会直接解析失败、连 job 都不建），
+# 所以判断放在 shell 里做。
+
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       unsigned:
-        description: '只出未签名包（不读 Secrets）'
+        description: '强制只出未签名包'
         type: boolean
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -45,13 +51,9 @@ jobs:
       - uses: android-actions/setup-android@v3
 
       - name: Install SDK packages
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Decode keystore
-        if: ${{ inputs.unsigned != true && secrets.KEYSTORE_BASE64 != '' }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
       - name: Assemble release
         working-directory: android
@@ -59,36 +61,48 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --console=plain
 
-      - name: Sign and align
-        if: ${{ inputs.unsigned != true && secrets.KEYSTORE_BASE64 != '' }}
+      - name: Align and sign (or keep unsigned)
         env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          FORCE_UNSIGNED: ${{ inputs.unsigned }}
         run: |
-          BT="${ANDROID_HOME}/build-tools/36.0.0"
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/36.0.0"
           IN="android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          OUT="OC-Studio-$(node -p "require('./package.json').version")-android.apk"
-          "$BT/zipalign" -p -f 4 "$IN" "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" sign \
-            --ks "$RUNNER_TEMP/release.keystore" \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass "pass:$KEYSTORE_PASSWORD" \
-            --key-pass "pass:$KEY_PASSWORD" \
-            --out "$OUT" "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" verify --print-certs "$OUT"
-          echo "APK=$OUT" >> "$GITHUB_ENV"
+          OUT="OC-Studio-android.apk"
 
-      - name: Collect unsigned build
-        if: ${{ inputs.unsigned == true || secrets.KEYSTORE_BASE64 == '' }}
-        run: |
-          cp android/app/build/outputs/apk/release/app-release-unsigned.apk \
-             "OC-Studio-$(node -p "require('./package.json').version")-android-unsigned.apk"
-          echo "APK=OC-Studio-$(node -p "require('./package.json').version")-android-unsigned.apk" >> "$GITHUB_ENV"
+          if [ ! -f "$IN" ]; then
+            echo "::error::找不到未签名 APK：$IN"
+            exit 1
+          fi
+
+          "$BT/zipalign" -p -f 4 "$IN" aligned.apk
+
+          if [ -z "${KEYSTORE_BASE64:-}" ] || [ "${FORCE_UNSIGNED:-false}" = "true" ]; then
+            echo "没有签名 Secrets（或是强制未签名）：输出未签名包"
+            cp aligned.apk "$OUT"
+            echo "UNSIGNED=1" >> "$GITHUB_ENV"
+          else
+            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            "$BT/apksigner" sign \
+              --ks release.keystore \
+              --ks-key-alias "$KEY_ALIAS" \
+              --ks-pass "pass:$KEYSTORE_PASSWORD" \
+              --key-pass "pass:$KEY_PASSWORD" \
+              --out "$OUT" aligned.apk
+            "$BT/apksigner" verify --print-certs "$OUT"
+            echo "UNSIGNED=0" >> "$GITHUB_ENV"
+          fi
+
+          echo "APK=$OUT" >> "$GITHUB_ENV"
+          sha256sum "$OUT" || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: apk
+          name: oc-studio-android-apk
           path: ${{ env.APK }}
           if-no-files-found: error
 
@@ -98,3 +112,9 @@ jobs:
         with:
           files: ${{ env.APK }}
           generate_release_notes: true
+          body: |
+            仅作移植参考的构建产物，不承诺后续更新。
+
+            - 版本：${{ github.ref_name }}
+            - 签名：${{ env.UNSIGNED == '1' && '未签名（需自行 apksigner 签名后才能安装）' || '已签名' }}
+            - 许可：MIT（上游 © Pokanshu, nekibud）
