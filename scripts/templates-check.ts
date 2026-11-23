@@ -1,0 +1,889 @@
+/**
+ * 模板自检（`npm run audit:templates`）。
+ *
+ * 拦的是「模板与实现漂移」—— 配了没反应的组件、认不出的 id、重复 id、
+ * 以及内置模板里漏了必填项。纯静态检查，不需要真实 vault。
+ */
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { BUILTIN_TEMPLATES } from '../src/lib/templates/defaults'
+import { TEMPLATE_SCHEMA_VERSION, templatePath } from '../src/lib/templates/types'
+import { COMPONENT_BY_ID, COMPONENT_IDS } from '../src/lib/templates/registry'
+import { docFromRecord, parseTemplate, serializeTemplate, unknownComponentIds } from '../src/lib/templates/serialize'
+import { WIRED_BY_TEMPLATE, availableComponents, isComponentAvailable, isComponentWired } from '../src/lib/templates/support'
+import {
+  TEMPLATE_PARAM_SCHEMA,
+  TEMPLATE_PARAM_SUPPORT,
+  TEMPLATE_PARAM_ANY_NOTE,
+  inlineParamDefs,
+  templateAcceptsParam,
+  validateTemplateParams,
+} from '../src/lib/templates/params'
+import { COUNTRY_KEYS, EVENT_KEYS, WORLD_KEYS, CHARACTER_KEYS } from '../src/lib/vault/fields'
+import {
+  ENTITY_TEMPLATE_IDS,
+  isNoteTemplate,
+  NOTE_COMPONENT_IDS,
+  perNoteTemplateByName,
+  perNoteTemplates,
+} from '../src/lib/templates/note'
+import { bodyPresetFromDoc } from '../src/lib/templates/body-preset'
+import {
+  BUILTIN_BODY_GROUPS,
+  defaultBodyGroupIdOfTemplate,
+  selectableBodyGroups,
+} from '../src/lib/templates/body-groups'
+import { bodyDocFromMarkdown } from '../src/lib/vault/write-body'
+import { templateFieldKeys, templateFieldLabels, templateFieldTypes } from '../src/lib/templates/fields'
+import {
+  BUILTIN_INFO_GROUPS,
+  infoFieldLabelOf,
+  infoFieldTypeOf,
+  isBuiltinInfoGroup,
+  normalizeInfoGroups,
+  selectableInfoGroups,
+} from '../src/lib/templates/info-groups'
+import { BUILTIN_FIELDS, defaultFieldConfig } from '../src/lib/fields/defaults'
+import { FIELD_KINDS } from '../src/lib/fields/types'
+import { legacyNoteSpecialFields, upgradeLegacyTemplate } from '../src/lib/templates/store'
+import { normalizeFieldConfig, serializeFieldConfig, upgradeFieldConfig } from '../src/lib/fields/store'
+import { BUILTIN_CATEGORIES } from '../src/lib/categories/builtins'
+import type { TemplateDoc } from '../src/lib/templates/types'
+
+let failures = 0
+function check(ok: boolean, message: string): void {
+  if (ok) return
+  failures += 1
+  console.error(`  ✗ ${message}`)
+}
+
+console.log('模板自检：')
+
+// 1. 组件登记表本身
+check(COMPONENT_IDS.length === new Set(COMPONENT_IDS).size, '组件登记表有重复 id')
+for (const id of COMPONENT_IDS) {
+  check(Boolean(COMPONENT_BY_ID[id]?.label), `组件 ${id} 缺 label`)
+}
+
+// 2. 内置模板
+for (const doc of BUILTIN_TEMPLATES) {
+  check(doc.id.trim() !== '', '内置模板缺 id')
+  check(doc.name.trim() !== '', `模板 ${doc.id} 缺名称`)
+  check(doc.components.length > 0, `模板 ${doc.id} 没有组件`)
+  const ids = doc.components.map((component) => component.id)
+  check(ids.length === new Set(ids).size, `模板 ${doc.id} 有重复组件`)
+  const unknown = unknownComponentIds(doc)
+  check(unknown.length === 0, `模板 ${doc.id} 有未登记组件：${unknown.join(', ')}`)
+  check(
+    doc.components.some((component) => component.id === 'body'),
+    `模板 ${doc.id} 少了「正文」`,
+  )
+}
+
+// 3. 往返：写出去再读回来，必须完全一致（模板文件是可分享的，不能丢参数）
+for (const doc of BUILTIN_TEMPLATES) {
+  const roundTrip = parseTemplate(serializeTemplate(doc), doc.id)
+  check(roundTrip !== null, `模板 ${doc.id} 序列化后读不回来`)
+  if (!roundTrip) continue
+  check(roundTrip.id === doc.id, `模板 ${doc.id} 往返后 id 变了`)
+  check(roundTrip.name === doc.name, `模板 ${doc.id} 往返后名称变了`)
+  check(
+    roundTrip.components.length === doc.components.length,
+    `模板 ${doc.id} 往返后组件数变了（${roundTrip.components.length} ≠ ${doc.components.length}）`,
+  )
+  check(
+    roundTrip.components.every((component, index) => component.id === doc.components[index]?.id),
+    `模板 ${doc.id} 往返后组件顺序变了`,
+  )
+}
+
+// 4. 手写容错：组件写成字符串数组也要能读
+const loose = parseTemplate(
+  ['---', 'id: custom-demo', '名称: 演示', '组件: [info, tags, body]', '---', '', '说明', ''].join('\n'),
+  'custom-demo',
+)
+check(loose !== null, '字符串数组形式的组件读不出来')
+check(loose?.components.length === 3, '字符串数组形式的组件数量不对')
+
+// 5. 非法输入不崩
+const broken: unknown[] = ['', '---\n名称: 无 id\n---', '---\nid: x\n---', 'not frontmatter']
+for (const raw of broken) {
+  const parsed = parseTemplate(String(raw), 'fallback')
+  check(parsed === null || typeof parsed.name === 'string', `解析异常输入时返回了非法结构：${String(raw).slice(0, 24)}`)
+}
+
+// 5b. 浏览器预览的 localStorage 快照必须过同一套归一化。
+//     只查「有 id / 有 name / 有 components」就塞进缓存的话，缺 aliases 的旧条目会让
+//     `findTemplateByName` 在 `doc.aliases.includes` 上抛 TypeError —— 新建条目整个失败。
+{
+  const legacySnapshot = docFromRecord(
+    { id: 'custom-old', name: '旧快照', components: [{ id: 'body', enabled: true }] },
+    '',
+  )
+  check(legacySnapshot !== null, '旧快照（缺 aliases）读不出来')
+  check(Array.isArray(legacySnapshot?.aliases), '旧快照读出来没有 aliases（findTemplateByName 会崩）')
+  check(
+    legacySnapshot !== null && isNoteTemplate(legacySnapshot),
+    '旧快照归一化后不是可用的笔记模板',
+  )
+  check(docFromRecord({ name: '没有 id' }, '') === null, '没有 id 的快照该被丢掉')
+  check(docFromRecord({ id: 'custom-2' }, '') === null, '没有名字的快照该被丢掉')
+  const noComponents = docFromRecord({ id: 'custom-3', name: '空', components: null }, '')
+  check(noComponents?.components.length === 0, 'components 不是数组时应退成空列表，而不是让整次装载失败')
+  const renamed = docFromRecord({ id: 'custom-4', 名称: '中文键', 别名: ['老名'], 主题: 'paper' }, '')
+  check(
+    renamed?.name === '中文键' && renamed.aliases[0] === '老名' && renamed.theme === 'paper',
+    '中文键（模板文件格式）的归一化丢了字段',
+  )
+}
+
+// 5c. id 里带 Windows 不认的字符时，文件名要洗掉 —— 否则一条坏模板会让所有模板都存不进去
+{
+  check(
+    templatePath('a/b').endsWith('/a-b.md'),
+    'id 里的斜杠没有洗掉（会写到子目录里）',
+  )
+  check(!templatePath('x:y').includes(':'), 'id 里的冒号没有洗掉（Windows 上写盘会失败）')
+  check(templatePath('..') === '.ocstudio/templates/template.md', '纯点的 id 没有兜底文件名')
+}
+
+// 6. 别名不重复并集冲突（同一旧名不能指向两个模板）
+const seenAlias = new Map<string, string>()
+for (const doc of BUILTIN_TEMPLATES) {
+  for (const alias of doc.aliases) {
+    const owner = seenAlias.get(alias)
+    check(!owner || owner === doc.id, `别名「${alias}」同时属于 ${owner} 和 ${doc.id}`)
+    seenAlias.set(alias, doc.id)
+  }
+}
+
+// 7. 所有模板名唯一（笔记里存的是名字）
+const seenName = new Set<string>()
+for (const doc of BUILTIN_TEMPLATES as TemplateDoc[]) {
+  check(!seenName.has(doc.name), `模板名重复：${doc.name}`)
+  seenName.add(doc.name)
+}
+
+// 8. 接线登记（support.ts）必须只引用真实存在的组件，且必须属于该模板
+for (const [templateId, ids] of Object.entries(WIRED_BY_TEMPLATE)) {
+  check(
+    BUILTIN_TEMPLATES.some((doc) => doc.id === templateId),
+    `接线登记里有不存在的模板：${templateId}`,
+  )
+  const template = BUILTIN_TEMPLATES.find((doc) => doc.id === templateId)
+  for (const id of ids) {
+    check(COMPONENT_IDS.includes(id), `接线登记 ${templateId} 引用了未登记组件：${id}`)
+    check(
+      Boolean(template?.components.some((component) => component.id === id)),
+      `接线登记 ${templateId} 里的 ${id} 不在该模板的组件清单里`,
+    )
+  }
+}
+
+// 9. 笔记渲染路径：笔记宿主的模板（含事件 / 国家，它们没有角色专属组件）必须可绑分类；
+// 角色模板带立绘 / 动画，笔记宿主没有那两个槽位，明确不算笔记模板
+for (const id of ['entry', 'pet', 'weapon', 'event', 'country']) {
+  const doc = BUILTIN_TEMPLATES.find((item) => item.id === id)
+  check(doc !== undefined && isNoteTemplate(doc), `内置模板 ${id} 不是可渲染的笔记模板`)
+}
+{
+  const character = BUILTIN_TEMPLATES.find((doc) => doc.id === 'character')
+  check(character !== undefined && !isNoteTemplate(character), '角色模板（含立绘 / 动画）不该被当成笔记模板')
+}
+for (const id of NOTE_COMPONENT_IDS) {
+  check(COMPONENT_IDS.includes(id), `笔记组件登记里有未登记组件：${id}`)
+}
+// 笔记组件闭集 = 组件登记表 − 角色专属（立绘 / 动画）：多一个没有槽位，少一个会显示「开发中」
+const CHARACTER_ONLY: (typeof COMPONENT_IDS)[number][] = ['portrait', 'animation']
+check(
+  COMPONENT_IDS.every((id) => CHARACTER_ONLY.includes(id) || NOTE_COMPONENT_IDS.includes(id)),
+  `笔记组件闭集少登记了组件：${COMPONENT_IDS.filter(
+    (id) => !CHARACTER_ONLY.includes(id) && !NOTE_COMPONENT_IDS.includes(id),
+  ).join(', ')}`,
+)
+check(
+  CHARACTER_ONLY.every((id) => !NOTE_COMPONENT_IDS.includes(id)),
+  '角色专属组件出现在笔记组件闭集里',
+)
+
+// 9b. 自建模板走笔记渲染路径：笔记组件必须算「已接线」，否则新建的模板
+//     每个组件都显示「开发中」，连「基本信息」都选不了（用户实测踩到过）
+for (const id of NOTE_COMPONENT_IDS) {
+  check(isComponentWired('custom-demo', id), `自建模板的 ${id} 不算已接线`)
+}
+for (const id of ['entry', 'pet', 'weapon']) {
+  check(
+    NOTE_COMPONENT_IDS.every((component) => isComponentWired(id, component)),
+    `内置笔记模板 ${id} 的接线表与笔记组件不一致`,
+  )
+}
+
+// 9c. 「添加组件」只列宿主真存得住的组件：实体模板不能出现它没有的列
+for (const [templateId, ids] of Object.entries(WIRED_BY_TEMPLATE)) {
+  const template = BUILTIN_TEMPLATES.find((doc) => doc.id === templateId)
+  for (const id of ids) {
+    check(COMPONENT_IDS.includes(id), `宿主表 ${templateId} 引用了未登记组件：${id}`)
+    check(
+      Boolean(template?.components.some((component) => component.id === id)),
+      `宿主表 ${templateId} 的 ${id} 不在默认模板里（默认模板不该带宿主存不住的组件）`,
+    )
+  }
+}
+for (const doc of BUILTIN_TEMPLATES) {
+  if (WIRED_BY_TEMPLATE[doc.id] !== undefined) continue
+  for (const component of doc.components) {
+    check(
+      isComponentAvailable(doc.id, component.id),
+      `笔记模板 ${doc.id} 的默认组件 ${component.id} 不在可用列表里`,
+    )
+  }
+}
+check(
+  availableComponents('custom-demo').length === NOTE_COMPONENT_IDS.length,
+  '自建模板的可用组件必须是笔记组件闭集',
+)
+
+// 10. 模板字段（宠物 / 武器）必须能往返：YAML 数组 ⇄ string[]
+for (const id of ['pet', 'weapon']) {
+  const doc = BUILTIN_TEMPLATES.find((item) => item.id === id)
+  check(doc !== undefined, `内置模板 ${id} 不存在`)
+  if (!doc) continue
+  const keys = templateFieldKeys(doc) ?? []
+  check(keys.length > 0, `内置模板 ${id} 没有声明 fields`)
+  check(new Set(keys).size === keys.length, `内置模板 ${id} 的 fields 有重复键`)
+  const parsed = parseTemplate(serializeTemplate(doc), doc.id)
+  check(
+    parsed !== null && JSON.stringify(templateFieldKeys(parsed)) === JSON.stringify(keys),
+    `内置模板 ${id} 往返后 fields 变了`,
+  )
+}
+
+// 11. 内置分类：模板必须存在，且出厂状态是关闭的（宠物 / 武器默认不启用）
+const seenCategoryId = new Set<string>()
+const seenCategoryName = new Set<string>()
+for (const category of BUILTIN_CATEGORIES) {
+  check(category.builtin === true, `内置分类 ${category.name} 缺 builtin 标记`)
+  check(category.enabled === false, `内置分类 ${category.name} 出厂应为未启用`)
+  check(!seenCategoryId.has(category.id), `内置分类 id 重复：${category.id}`)
+  check(!seenCategoryName.has(category.name), `内置分类名重复：${category.name}`)
+  seenCategoryId.add(category.id)
+  seenCategoryName.add(category.name)
+  check(
+    BUILTIN_TEMPLATES.some((doc) => doc.id === category.template),
+    `内置分类 ${category.name} 绑定了不存在的模板：${category.template}`,
+  )
+}
+
+// 12. 组件参数契约：登记的参数必须属于真实组件，消费方模板必须存在；内置模板不能带未登记参数
+for (const [componentId, defs] of Object.entries(TEMPLATE_PARAM_SCHEMA)) {
+  check(COMPONENT_IDS.includes(componentId as (typeof COMPONENT_IDS)[number]), `参数契约引用了未登记组件：${componentId}`)
+  const keys = defs?.map((def) => def.key) ?? []
+  check(keys.length === new Set(keys).size, `组件 ${componentId} 的参数键重复`)
+  for (const def of defs ?? []) {
+    // 值域是用户数据的参数（组件 id / 旧字段表）没有静态选项
+    if (def.kind !== 'choice') continue
+    check(def.options.length > 0, `参数 ${componentId}.${def.key} 没有可选值`)
+    check(
+      def.options.some((option) => option.value === def.fallback),
+      `参数 ${componentId}.${def.key} 的默认值不在选项里`,
+    )
+  }
+}
+for (const [componentId, templates] of Object.entries(TEMPLATE_PARAM_SUPPORT)) {
+  for (const templateId of templates ?? []) {
+    const template = BUILTIN_TEMPLATES.find((doc) => doc.id === templateId)
+    check(Boolean(template), `参数消费登记里有不存在的模板：${templateId}`)
+    check(
+      Boolean(template?.components.some((component) => component.id === componentId)),
+      `参数消费登记 ${templateId} 没有组件 ${componentId}`,
+    )
+    check(
+      isComponentWired(templateId, componentId as (typeof COMPONENT_IDS)[number]),
+      `参数消费登记 ${templateId}.${componentId} 没有出现在接线表里`,
+    )
+  }
+}
+for (const doc of BUILTIN_TEMPLATES) {
+  const errors = validateTemplateParams(doc)
+  check(errors.length === 0, `模板 ${doc.id} 参数校验失败：${errors.join('；')}`)
+}
+
+// 国家有自己的字段表（只有自建字段）：FieldKind 必须登记，否则设置里点不进去
+check(FIELD_KINDS.includes('country'), 'FieldKind 没有登记 country（国家字段表不可用）')
+
+// 头像是独立组件：内置角色 / 国家模板默认启用它；旧默认（头像关）升级时自动补上
+for (const id of ['character', 'country']) {
+  const doc = BUILTIN_TEMPLATES.find((item) => item.id === id)
+  const avatar = doc?.components.find((component) => component.id === 'avatar')
+  check(avatar?.enabled === true, `内置「${id}」模板没有默认启用头像组件`)
+}
+{
+  const builtin = BUILTIN_TEMPLATES.find((doc) => doc.id === 'character')
+  check(builtin !== undefined, '找不到内置角色模板')
+  if (builtin) {
+    // 旧默认：头像关着，且还没有立绘 / 动画组件
+    const legacy = {
+      ...builtin,
+      components: builtin.components
+        .filter((component) => component.id !== 'portrait' && component.id !== 'animation')
+        .map((component) =>
+          component.id === 'avatar' ? { ...component, enabled: false } : component,
+        ),
+    }
+    const upgraded = upgradeLegacyTemplate(legacy)
+    check(
+      upgraded.components.find((component) => component.id === 'avatar')?.enabled === true,
+      '旧默认角色模板升级后没有打开头像组件',
+    )
+    // 动过的旧模板：只补立绘 / 动画，原有顺序与开关（头像仍然关着）不动
+    const customized = {
+      ...legacy,
+      components: [...legacy.components].reverse(),
+    }
+    const migrated = upgradeLegacyTemplate(customized)
+    const migratedIds = migrated.components.map((component) => component.id)
+    check(
+      migratedIds.indexOf('portrait') > 0 && migratedIds.includes('animation'),
+      '动过的旧模板没有补上立绘 / 动画',
+    )
+    check(
+      migrated.components.find((component) => component.id === 'avatar')?.enabled === false,
+      '动过的旧模板被强行打开了头像',
+    )
+    const order = migrated.components
+      .filter((component) => component.id !== 'portrait' && component.id !== 'animation')
+      .map((component) => component.id)
+    check(
+      order.join(',') === customized.components.map((component) => component.id).join(','),
+      '补组件时改动了用户原有的顺序',
+    )
+    // 已经升过级的模板（带 schema）不再补
+    const current = { ...migrated, schema: TEMPLATE_SCHEMA_VERSION }
+    check(upgradeLegacyTemplate(current) === current, '已升级的模板又被补了一遍组件')
+  }
+}
+
+// 接线表里的每个 id 必须在对应宿主的渲染文件里真有分支（防「开关能开、画不出来」）
+{
+  const hostFiles: Record<string, string> = {
+    character: 'src/features/characters/components/CharacterFrontmatter.tsx',
+    event: 'src/features/events/components/EventFrontmatter.tsx',
+    country: 'src/features/countries/components/CountryFrontmatter.tsx',
+  }
+  for (const [host, components] of Object.entries(WIRED_BY_TEMPLATE)) {
+    const file = hostFiles[host]
+    check(file !== undefined, `接线表有未知宿主：${host}`)
+    if (file === undefined) continue
+    const source = readFileSync(file, 'utf8')
+    for (const id of components) {
+      check(source.includes(`case '${id}'`), `接线表 ${host}.${id} 在 ${file} 里没有渲染分支`)
+    }
+  }
+  const noteSource = readFileSync('src/features/world/components/note/NoteTemplateContent.tsx', 'utf8')
+  for (const id of NOTE_COMPONENT_IDS) {
+    check(noteSource.includes(`case '${id}'`), `笔记宿主组件 ${id} 在 NoteTemplateContent 里没有渲染分支`)
+  }
+}
+
+// 登记成 `choice` 的参数必须真有 `componentParam(...)` 读取：否则就是「界面上能改、渲染没反应」
+{
+  const dirs = ['src/components', 'src/features', 'src/lib/templates']
+  const files: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.(ts|tsx)$/.test(entry.name)) files.push(full)
+    }
+  }
+  for (const dir of dirs) walk(dir)
+  const source = files.map((file) => readFileSync(file, 'utf8')).join('\n')
+  for (const [componentId, defs] of Object.entries(TEMPLATE_PARAM_SCHEMA)) {
+    for (const def of defs ?? []) {
+      if (def.kind !== 'choice') continue
+      const pattern = new RegExp(`componentParam\\([\\s\\S]{0,80}?['"]${def.key}['"]`)
+      check(
+        pattern.test(source),
+        `参数 ${componentId}.${def.key} 没有任何渲染器读取（配了没反应）`,
+      )
+    }
+  }
+  // 标题文案走 `componentLabel()`（文本参数，不是 componentParam）
+  const hasLabelParam = Object.values(TEMPLATE_PARAM_SCHEMA).some((defs) =>
+    (defs ?? []).some((def) => def.key === 'label'),
+  )
+  if (hasLabelParam) {
+    check(source.includes('componentLabel('), '标题文案参数没有任何渲染器读取（配了没反应）')
+  }
+}
+
+// `info.group` 只对笔记宿主开放：实体模板即使含正文也不能换基本信息组件（换了不生效）
+{
+  const byId = new Map(BUILTIN_TEMPLATES.map((doc) => [doc.id, doc]))
+  const accepts = (id: string): boolean => {
+    const doc = byId.get(id)
+    return doc !== undefined && templateAcceptsParam(id, 'info', doc)
+  }
+  check(!accepts('character') && !accepts('event') && !accepts('country'), '实体模板仍能改基本信息组件（选了不生效）')
+  check(accepts('pet') && accepts('weapon'), '笔记宿主模板改不了基本信息组件')
+}
+
+// 13. 参数必须能写进模板文件再读回来（YAML 嵌套对象，不能丢）
+const withParams: TemplateDoc = {
+  id: 'character',
+  name: '参数往返',
+  aliases: [],
+  components: [
+    { id: 'relations', enabled: true, params: { presentation: 'compact', title: false } },
+    { id: 'gallery', enabled: true, params: { mode: 'slider', columns: 3 } },
+    { id: 'body', enabled: true },
+  ],
+}
+const paramRoundTrip = parseTemplate(serializeTemplate(withParams), 'character')
+check(paramRoundTrip !== null, '带参数的模板序列化后读不回来')
+check(
+  JSON.stringify(paramRoundTrip?.components) === JSON.stringify(withParams.components),
+  '带参数的模板往返后 params 变了',
+)
+check(validateTemplateParams(withParams).length === 0, '合法参数被校验器判错')
+
+// 13b. 正文组件：模板只存「选择」（`body.params.group`），骨架在组件自己身上
+const bodyGroupMarkdown = ['## 人物简介', '', '写三句话。', '', '- 出生地', '- 年龄', '', '相关：[[主角]]'].join('\n')
+const withBodyGroup: TemplateDoc = {
+  id: 'character',
+  name: '正文组件选择',
+  aliases: [],
+  components: [{ id: 'body', enabled: true, params: { group: 'body-character' } }],
+}
+const bodyGroupRoundTrip = parseTemplate(serializeTemplate(withBodyGroup), 'character')
+check(
+  bodyGroupRoundTrip?.components[0]?.params?.group === 'body-character',
+  '正文组件的选择往返后变了',
+)
+check(validateTemplateParams(withBodyGroup).length === 0, '合法的正文组件选择被校验器判错')
+const numericGroup: TemplateDoc = {
+  ...withBodyGroup,
+  components: [{ id: 'body', enabled: true, params: { group: 42 } }],
+}
+check(validateTemplateParams(numericGroup).length > 0, '正文组件接受非字符串的值')
+const emptyGroup: TemplateDoc = {
+  ...withBodyGroup,
+  components: [{ id: 'body', enabled: true, params: { group: '  ' } }],
+}
+check(validateTemplateParams(emptyGroup).length > 0, '正文组件接受空值')
+check(inlineParamDefs('body').length === 0, '正文组件不该出现在编排行内（它是独立配置面）')
+
+// 13c. 组件里的骨架 Markdown ⇄ 编辑器文档 必须逐字往返（含指向还没建的条目的 [[ ]]
+const presetDoc = bodyDocFromMarkdown(bodyGroupMarkdown, { unresolvedLinks: 'keep' })
+check(bodyPresetFromDoc(presetDoc) === bodyGroupMarkdown, '正文骨架的 Markdown ⇄ 文档 往返变了')
+// 写正文（助手写章节）时的口径不变：未建链接降级成纯文本，方括号消失
+const droppedDoc = bodyDocFromMarkdown('相关：[[主角]]')
+check(!bodyPresetFromDoc(droppedDoc).includes('[['), '写正文时未建链接仍该降级成纯文本')
+
+// 13d. 内置正文组件：每个实体宿主都有出厂骨架，且「空正文」是空的
+for (const group of BUILTIN_BODY_GROUPS) {
+  check(group.name.trim() !== '', '内置正文组件缺名字')
+  if (group.id === 'body-empty') check(group.markdown === '', '「空正文」组件不该带骨架')
+}
+check(
+  defaultBodyGroupIdOfTemplate('character') === 'body-character' &&
+    defaultBodyGroupIdOfTemplate('country') === 'body-country' &&
+    defaultBodyGroupIdOfTemplate('entry') === 'body-empty',
+  '默认正文组件映射不对',
+)
+check(
+  selectableBodyGroups('character', BUILTIN_BODY_GROUPS).every((group) => group.for === undefined || group.for === 'character'),
+  '角色模板选到了别的宿主的正文组件',
+)
+
+/* ── 内置基本信息组件：字段必须真能显示 ─────────────────────────────── */
+
+const COLUMN_HOSTS: Record<string, 'character' | 'event' | 'country'> = {
+  character: 'character',
+  event: 'event',
+  country: 'country',
+}
+
+for (const group of BUILTIN_INFO_GROUPS) {
+  check(group.for !== undefined, `内置组件「${group.name}」没标宿主`)
+  // 国家没有内置列（体制 / 地理 / 文化在正文里），字段表只有自建字段
+  if (group.id !== 'group-country') {
+    check(group.fields.length > 0, `内置组件「${group.name}」没有出厂字段`)
+  }
+  const columnKind = group.for !== undefined ? COLUMN_HOSTS[group.for] : undefined
+  if (columnKind === undefined) continue
+  const known = new Set(BUILTIN_FIELDS[columnKind].map((field) => field.id))
+  for (const key of group.fields) {
+    check(known.has(key), `内置组件「${group.name}」的字段 ${key} 不在 ${columnKind} 的字段表里`)
+  }
+}
+
+// 内置组件必须被 isBuiltinInfoGroup 认出来（否则界面允许删掉它，下次读盘又回来）
+for (const group of BUILTIN_INFO_GROUPS) {
+  check(isBuiltinInfoGroup(group.id), `内置组件「${group.name}」没被 isBuiltinInfoGroup 覆盖`)
+}
+
+// 字段表的归属：被独立 block 接管的字段不许再留在「基本信息」的字段表里
+const fieldIds = (kind: 'character' | 'event' | 'worldEntry'): string[] =>
+  BUILTIN_FIELDS[kind].map((field) => field.id)
+check(!fieldIds('character').includes('tags'), '角色的字段表还留着 tags（标签是独立组件）')
+check(!fieldIds('event').includes('tags'), '事件的字段表还留着 tags（标签是独立组件）')
+// 时间 / 结束时间 / 地点 2026-11-10 收回基本信息：组件退役，字段表里必须有这三行
+for (const key of ['time', 'endTime', 'location']) {
+  check(fieldIds('event').includes(key), `事件的字段表少了 ${key}（时间 / 地点已是基本信息的字段行）`)
+}
+check(fieldIds('worldEntry').length === 0, '词条不该有全局字段表（字段来自按篇选的模板 / 组件）')
+
+// 盘上旧配置里的「退役字段」读回时丢掉：否则基本信息会把时间 / 地点 / 标签再画一遍
+const legacyConfig = normalizeFieldConfig({
+  character: [{ id: 'aliases', label: '别名' }, { id: 'tags', label: '标签' }],
+  event: [
+    { id: 'time', label: '开始' },
+    { id: 'endTime', label: '结束' },
+    { id: 'location', label: '地点' },
+    { id: 'isMajor', label: '重大事件' },
+    { id: 'tags', label: '标签' },
+    { id: 'custom-x1', label: '势力', key: '势力' },
+  ],
+  worldEntry: [{ id: 'tags', label: '标签' }],
+})
+check(
+  legacyConfig.character.every((field) => field.id !== 'tags'),
+  '旧配置里的角色 tags 读回来了',
+)
+check(
+  legacyConfig.event.every((field) => field.id !== 'tags'),
+  '旧配置里的事件标签读回来了（标签归独立组件）',
+)
+check(
+  ['time', 'endTime', 'location'].every((id) => legacyConfig.event.some((field) => field.id === id)),
+  '旧配置里的事件时间 / 地点被丢掉了（它们是基本信息的字段行）',
+)
+check(
+  legacyConfig.event.some((field) => field.id === 'isMajor') &&
+    legacyConfig.event.some((field) => field.key === '势力'),
+  '读旧配置时把有效字段一起丢了',
+)
+check(
+  BUILTIN_TEMPLATES.find((doc) => doc.id === 'entry')?.components.every((component) => component.id !== 'info') === true,
+  '内置词条模板默认不该带「基本信息」',
+)
+
+// 字段表 v1 → v2：当年退役的时间 / 地点一次性补回默认位置；已是 v2 的不再补
+{
+  const v1 = normalizeFieldConfig({
+    event: [{ id: 'isMajor', label: '重大事件' }, { id: 'f_1', label: '势力', key: '势力' }],
+  })
+  const upgraded = upgradeFieldConfig(v1, 1)
+  const ids = upgraded.event.map((field) => field.id)
+  check(
+    ids.indexOf('time') === 0 && ids.includes('endTime') && ids.includes('location'),
+    '字段表升级没把时间 / 结束时间 / 地点补回默认位置',
+  )
+  check(ids.includes('isMajor') && ids.includes('f_1'), '字段表升级把用户原有字段丢了')
+  check(
+    upgradeFieldConfig(upgraded, 3) === upgraded,
+    '已经是 v3 的字段表又被补了一遍（用户删掉的行会回来）',
+  )
+}
+
+// 字段表 v2 → v4：国家补出厂字段（建立 / 结束时间、政体、首都、官方语言、货币），
+// 其中建立 / 结束时间是 time 类型（三段控件），值仍是 YYYY-MM-DD 字符串
+{
+  const v2 = normalizeFieldConfig({ country: [] })
+  const upgraded = upgradeFieldConfig(v2, 2)
+  const labels = upgraded.country.map((field) => field.label)
+  check(
+    ['建立时间', '结束时间', '政体', '首都', '官方语言', '货币'].every((label) => labels.includes(label)),
+    '国家出厂字段没有补齐',
+  )
+  check(
+    upgraded.country.find((field) => field.label === '政体')?.key === '政体类型',
+    '「政体」的落盘键与 system 的读别名撞了',
+  )
+  check(
+    upgraded.country.find((field) => field.label === '建立时间')?.type === 'time' &&
+      upgraded.country.find((field) => field.label === '结束时间')?.type === 'time',
+    '国家的建立 / 结束时间不是 time 类型',
+  )
+  check(
+    upgraded.country.every((field) => field.key !== undefined),
+    '国家出厂字段被当成内置列（key 丢了）',
+  )
+  check(
+    upgradeFieldConfig(upgraded, 4) === upgraded,
+    '已经是 v4 的国家出厂字段又被补了一遍',
+  )
+
+  // 用户已经有的同键字段不能再塞一条
+  const existing = normalizeFieldConfig({
+    country: [{ id: 'f_owned', label: '建立时间', key: '建立时间' }],
+  })
+  const merged = upgradeFieldConfig(existing, 2)
+  check(
+    merged.country.filter((field) => field.key === '建立时间').length === 1,
+    '已有的「建立时间」被重复添加',
+  )
+  check(
+    defaultFieldConfig().country.some((field) => field.label === '政体'),
+    '新库的默认字段表里没有国家出厂字段',
+  )
+  const roundTrip = normalizeFieldConfig(defaultFieldConfig())
+  check(
+    roundTrip.country.find((field) => field.label === '政体')?.key === '政体类型',
+    '默认配置读回时把政体的落盘键丢了',
+  )
+  check(
+    roundTrip.country.find((field) => field.label === '建立时间')?.type === 'time',
+    '默认配置读回时把建立时间的 time 类型丢了',
+  )
+  const persisted = normalizeFieldConfig(JSON.parse(serializeFieldConfig(defaultFieldConfig())))
+  check(
+    persisted.country.find((field) => field.key === '建立时间')?.type === 'time',
+    '字段表落盘再读回时把建立时间的 time 类型丢了',
+  )
+
+  // v3 的旧配置把建立 / 结束时间存成 text；升级后应转成 time
+  const v3 = normalizeFieldConfig({
+    country: [
+      { id: 'f_country_founded', label: '建立时间', key: '建立时间' },
+      { id: 'f_country_dissolved', label: '结束时间', key: '结束时间' },
+    ],
+  })
+  const v4 = upgradeFieldConfig(v3, 3)
+  check(
+    v4.country.find((field) => field.key === '建立时间')?.type === 'time' &&
+      v4.country.find((field) => field.key === '结束时间')?.type === 'time',
+    'v3 → v4 没把国家时间字段转成 time',
+  )
+  check(upgradeFieldConfig(v4, 4) === v4, 'v4 的国家时间字段又被转了一遍')
+}
+
+// 模板 v2 → v3：时间 / 地点组件退役；笔记模板的这两块要补成基本信息的特殊字段
+{
+  const legacyEvent = {
+    id: 'event',
+    name: '事件',
+    aliases: [],
+    components: [
+      { id: 'cover', enabled: true },
+      { id: 'info', enabled: true },
+      { id: 'time', enabled: true },
+      { id: 'place', enabled: true },
+      { id: 'summary', enabled: true },
+      { id: 'body', enabled: true },
+    ],
+  } as unknown as TemplateDoc
+  const upgraded = upgradeLegacyTemplate(legacyEvent)
+  const ids = upgraded.components.map((component) => component.id)
+  check(!ids.includes('time' as never) && !ids.includes('place' as never), '旧事件模板的时间 / 地点组件没退役')
+  check(
+    ids.join(',') === 'cover,info,summary,body',
+    '退役时间 / 地点时改动了用户原有顺序',
+  )
+
+  const noteDoc = {
+    id: 'custom-note',
+    name: '笔记',
+    aliases: [],
+    components: [
+      { id: 'info', enabled: true, params: { group: 'group-pet' } },
+      { id: 'time', enabled: true },
+      { id: 'place', enabled: true },
+      { id: 'body', enabled: true },
+    ],
+  } as unknown as TemplateDoc
+  const needs = legacyNoteSpecialFields(noteDoc)
+  check(
+    needs?.groupId === 'group-pet' &&
+      needs.types.includes('time') &&
+      needs.types.includes('timeEnd') &&
+      needs.types.includes('place'),
+    '旧笔记模板的时间 / 地点没有映射成基本信息的特殊字段',
+  )
+  const noInterval = {
+    ...noteDoc,
+    components: [
+      { id: 'info', enabled: true, params: { group: 'group-pet' } },
+      { id: 'time', enabled: true, params: { interval: false } },
+      { id: 'body', enabled: true },
+    ],
+  } as unknown as TemplateDoc
+  check(
+    legacyNoteSpecialFields(noInterval)?.types.join(',') === 'time',
+    '关掉区间的时间组件不该补「结束时间」字段',
+  )
+  check(legacyNoteSpecialFields(upgraded) === null, '已升级的笔记模板又被安排了一遍特殊字段')
+}
+
+// 单篇覆盖的候选：实体模板必须被排除，笔记模板必须留下
+const perNote = perNoteTemplates(BUILTIN_TEMPLATES)
+for (const id of ENTITY_TEMPLATE_IDS) {
+  check(!perNote.some((doc) => doc.id === id), `单篇模板候选里还有实体模板「${id}」`)
+}
+for (const id of ['entry', 'pet', 'weapon']) {
+  check(perNote.some((doc) => doc.id === id), `单篇模板候选里少了「${id}」`)
+}
+check(perNoteTemplateByName(BUILTIN_TEMPLATES, '角色') === undefined, '单篇覆盖还能选到角色模板（会渲染成空行）')
+check(perNoteTemplateByName(BUILTIN_TEMPLATES, '宠物')?.id === 'pet', '单篇覆盖认不出宠物模板')
+check(perNoteTemplateByName(BUILTIN_TEMPLATES, '  ') === undefined, '空名字不该匹配到任何模板')
+
+// 选择器过滤：角色模板不能选到宠物组件
+const petGroup = BUILTIN_INFO_GROUPS.find((group) => group.id === 'group-pet')
+if (petGroup) {
+  const forCharacter = selectableInfoGroups('character', BUILTIN_INFO_GROUPS)
+  check(!forCharacter.includes(petGroup), '角色模板仍能选到宠物组件')
+  const countryGroup = BUILTIN_INFO_GROUPS.find((group) => group.id === 'group-country')
+  check(countryGroup?.for === 'country', '内置国家组件没标宿主 country')
+  check(
+    selectableInfoGroups('country', BUILTIN_INFO_GROUPS).every((group) => group.for === 'country'),
+    '国家模板选到了别的宿主的字段表',
+  )
+  const forPet = selectableInfoGroups('pet', BUILTIN_INFO_GROUPS)
+  check(forPet.includes(petGroup), '宠物模板选不到宠物组件')
+  // 词条是笔记宿主：能选宠物组件；事件是列型宿主：只能选自己的字段表
+  check(selectableInfoGroups('entry', BUILTIN_INFO_GROUPS).includes(petGroup), '词条选不到笔记型基本信息组件')
+  check(!selectableInfoGroups('event', BUILTIN_INFO_GROUPS).includes(petGroup), '事件模板仍能选到宠物组件')
+}
+
+// 退役的内置组件：盘上残留的 group-world 读回时丢掉
+const retired = normalizeInfoGroups([{ id: 'group-world', name: '词条', fields: ['tags'] }])
+check(retired.every((group) => group.id !== 'group-world'), '退役的「词条」基本信息组件又读回来了')
+// 盘上改不了内置组件的宿主，也塞不进不存在的列键
+const tampered = normalizeInfoGroups([
+  { id: 'group-character', name: '角色', fields: ['race', '并不存在的键'], for: 'note' },
+])
+const tamperedGroup = tampered.find((group) => group.id === 'group-character')
+check(tamperedGroup?.for === 'character', '盘上的 for 改写了内置组件的宿主')
+check(
+  tamperedGroup !== undefined && !tamperedGroup.fields.includes('并不存在的键'),
+  '不存在的列键被读回进内置组件（界面上会出现死行）',
+)
+// 列型宿主的字段顺序与范围归 FieldConfig（字段表编辑器）；盘上的值不作数
+const reordered = normalizeInfoGroups([
+  { id: 'group-character', name: '角色', fields: ['birthday'] },
+]).find((group) => group.id === 'group-character')
+const characterDefaults = BUILTIN_INFO_GROUPS.find((group) => group.id === 'group-character')
+check(
+  reordered !== undefined &&
+    characterDefaults !== undefined &&
+    reordered.fields.join(',') === characterDefaults.fields.join(','),
+  '列型宿主的字段没有按 FieldConfig 投影（盘上的值越权了）',
+)
+/* ── 字段类型：只有笔记型组件有，且必须是四种之一（没有「多行」）────────── */
+
+const petBuiltin = BUILTIN_INFO_GROUPS.find((group) => group.id === 'group-pet')
+check(petBuiltin?.types?.['出生日期'] === 'date', '内置宠物组件的出生日期不是日期类型')
+check(
+  petBuiltin !== undefined && !petBuiltin.fields.includes('外观特征'),
+  '内置宠物组件还留着长文字段（那几段归正文）',
+)
+check(infoFieldTypeOf(petBuiltin, '品种') === 'text', '没设类型的字段没有回落到单行')
+check(infoFieldTypeOf(undefined, 'x') === 'text', '组件不存在时类型访问炸了')
+
+const typedSaved = normalizeInfoGroups([
+  {
+    id: 'group-pet',
+    name: '宠物',
+    fields: ['年龄', '性格', '退役'],
+    types: { 年龄: 'number', 性格: 'boolean', 退役: 'longtext', 不存在的键: 'date', 性格2: '看不懂' },
+  },
+]).find((group) => group.id === 'group-pet')
+check(typedSaved?.types?.['年龄'] === 'number', '笔记型组件的字段类型没存住')
+check(typedSaved?.types?.['性格'] === 'boolean', '笔记型组件的第二个字段类型丢了')
+check(typedSaved !== undefined && !('不存在的键' in (typedSaved.types ?? {})), '已删除字段的类型仍留在盘上')
+check(typedSaved !== undefined && !('性格2' in (typedSaved.types ?? {})), '不认识的类型被读回来了')
+check(
+  typedSaved !== undefined && !('退役' in (typedSaved.types ?? {})),
+  '已退役的「多行」类型被读回来了（应当回落单行）',
+)
+
+// 列型宿主：控件归字段表，组件里写的类型不作数
+const columnTyped = normalizeInfoGroups([
+  { id: 'group-character', name: '角色', fields: ['race'], types: { race: 'number' } },
+]).find((group) => group.id === 'group-character')
+check(columnTyped?.types === undefined, '列型宿主从盘上读到了字段类型（控件会有两个源）')
+
+// 模板侧：读得到笔记型组件的类型，列型宿主一律 undefined
+const petDoc: TemplateDoc = {
+  id: 'pet',
+  name: '宠物',
+  aliases: [],
+  components: [{ id: 'info', enabled: true, params: { group: 'group-pet' } }],
+}
+check(templateFieldTypes(petDoc, BUILTIN_INFO_GROUPS)?.['出生日期'] === 'date', '模板读不到选中组件的字段类型')
+const characterDoc: TemplateDoc = {
+  id: 'character',
+  name: '角色',
+  aliases: [],
+  components: [{ id: 'info', enabled: true, params: { group: 'group-character' } }],
+}
+check(templateFieldTypes(characterDoc, BUILTIN_INFO_GROUPS) === undefined, '列型模板读到了组件里的字段类型')
+check(templateFieldTypes({ ...petDoc, components: [{ id: 'info', enabled: true }] }, BUILTIN_INFO_GROUPS) === undefined, '没选组件的模板读到了类型')
+
+/* ── 显示名：键是落盘用的，名字是给人看的 ─────────────────────────── */
+
+const labeledSaved = normalizeInfoGroups([
+  {
+    id: 'group-pet',
+    name: '宠物',
+    fields: ['物种', '年龄'],
+    labels: { 物种: '生物类别', 年龄: '   ', 不存在的键: '幽灵' },
+  },
+]).find((group) => group.id === 'group-pet')
+check(labeledSaved?.labels?.['物种'] === '生物类别', '字段显示名没存住')
+check(labeledSaved !== undefined && !('年龄' in (labeledSaved.labels ?? {})), '空白显示名被当成有效值')
+check(labeledSaved !== undefined && !('不存在的键' in (labeledSaved.labels ?? {})), '已删除字段的显示名仍留在盘上')
+check(infoFieldLabelOf(labeledSaved, '物种') === '生物类别', '读取显示名时没用盘上的值')
+check(infoFieldLabelOf(labeledSaved, '年龄') === '年龄', '没设显示名的字段没有回落到键名')
+
+const sameName = normalizeInfoGroups([
+  { id: 'group-pet', name: '宠物', fields: ['物种'], labels: { 物种: '物种' } },
+]).find((group) => group.id === 'group-pet')
+check(sameName?.labels === undefined, '显示名与键名相同时也被存下来了')
+
+const columnLabeled = normalizeInfoGroups([
+  { id: 'group-character', name: '角色', fields: ['race'], labels: { race: '种族' } },
+]).find((group) => group.id === 'group-character')
+check(columnLabeled?.labels === undefined, '列型宿主从盘上读到了显示名（显示名有两个源）')
+
+const labeledDoc: TemplateDoc = {
+  id: 'pet',
+  name: '宠物',
+  aliases: [],
+  components: [{ id: 'info', enabled: true, params: { group: 'group-pet' } }],
+}
+check(
+  templateFieldLabels(labeledDoc, normalizeInfoGroups([
+    { id: 'group-pet', name: '宠物', fields: ['物种'], labels: { 物种: '生物类别' } },
+  ]))?.['物种'] === '生物类别',
+  '模板读不到选中组件的字段显示名',
+)
+check(templateFieldLabels(characterDoc, BUILTIN_INFO_GROUPS) === undefined, '列型模板读到了组件里的显示名')
+
+/* ── 组件的落盘槽位必须都在 frontmatter 词汇表里 ─────────────────────── */
+
+const WORLD_SLOT_KEYS = ['avatar', 'image', 'gallery', 'time', 'endTime', 'location'] as const
+for (const key of WORLD_SLOT_KEYS) {
+  check(
+    key in WORLD_KEYS,
+    `笔记宿主的组件槽位 ${key} 不在 WORLD_KEYS 里（写不回去 / 读不回来）`,
+  )
+}
+check('gallery' in COUNTRY_KEYS, '国家的画廊槽位不在 COUNTRY_KEYS 里')
+check('images' in EVENT_KEYS, '事件的画廊槽位不在 EVENT_KEYS 里')
+for (const key of ['avatar', 'gallery', 'bio'] as const) {
+  check(key in CHARACTER_KEYS, `角色的组件槽位 ${key} 不在 CHARACTER_KEYS 里`)
+}
+// 单图 / 画廊 / 简介 / 关系的呈现参数都必须登记，否则模板里配了没人读
+for (const id of ['image', 'gallery', 'summary', 'relations'] as const) {
+  check((TEMPLATE_PARAM_SCHEMA[id]?.length ?? 0) > 0, `组件 ${id} 没有登记参数契约`)
+  check(TEMPLATE_PARAM_ANY_NOTE[id] === true, `组件 ${id} 没有对笔记模板开放参数`)
+}
+
+if (failures === 0) {
+  console.log(`  ✓ 通过（${COMPONENT_IDS.length} 个组件 / ${BUILTIN_TEMPLATES.length} 个内置模板）`)
+  process.exit(0)
+}
+console.error(`\n${failures} 项未通过`)
+process.exit(1)

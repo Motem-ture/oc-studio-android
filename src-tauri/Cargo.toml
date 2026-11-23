@@ -1,0 +1,70 @@
+[package]
+name = "app"
+version = "0.20.5-beta"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+# macos-private-api：`tauri.conf.json` 的 `app.macOSPrivateApi` 为 true 时，
+# tauri-build 会校验这里必须有对应 feature（否则直接构建失败）。自 Tauri 2.12.1 起
+# 该 feature 本身是空标记（透明窗口的私有 API 已常开），对 Windows 构建零影响。
+tauri = { version = "2.12.5", features = ["protocol-asset", "macos-private-api"] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+window-vibrancy = "0.7"
+windows-version = "0.1"
+tauri-plugin-clipboard-manager = "2.3.2"
+# 窗口位置 / 尺寸 / 最大化状态记忆（可见性由我们自己控制，见 lib.rs 的 StateFlags）
+tauri-plugin-window-state = "2"
+
+# 只 Windows 用：关掉 WebView2 的浏览器加速键（F5 / Ctrl+R / Ctrl+P …）。
+# 版本必须与 Tauri 依赖树里 wry 用的那份一致（Cargo.lock：webview2-com 0.39.1 / windows-core 0.62），
+# 否则 `cast` 用到的 `Interface` trait 来自另一个 crate 版本，编译期就不认。
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+
+# ── 助手插件（照 Simple-Agent 的清单原样引）──────────────────────────────
+tauri-plugin-opener = "2"
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "sync",
+  "time",
+  "macros",
+  "process",
+  "io-util",
+] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "stream",
+  "rustls-tls",
+  "gzip",
+] }
+futures-util = "0.3"
+rusqlite = { version = "0.41", features = ["bundled"] }
+keyring = "4"
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+regex = "1"
+walkdir = "2"
+base64 = "0.23"
+percent-encoding = "2"
+

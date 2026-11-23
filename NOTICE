@@ -1,0 +1,57 @@
+OC Studio · Android — NOTICE
+============================
+
+This project is an unofficial Android port of OC Studio.
+
+Upstream project
+----------------
+  OC Studio
+  https://github.com/Pokanshuu/OC-Studio
+  Copyright (c) 2026 Pokanshu, nekibud, and contributors
+  License: MIT (see LICENSE)
+
+This port is based on upstream v0.20.5-beta. It is not affiliated with,
+sponsored by, or endorsed by the upstream authors. "OC Studio" is used
+only to describe the origin of this work.
+
+Port modifications
+------------------
+  Copyright (c) 2026 Motem-ture (github.com/Motem-ture)
+  License: MIT (see LICENSE)
+
+  Maintenance status: NONE. This port is published as a reference for
+  porting a Next.js + Tauri app to Capacitor/Android. It will not be
+  updated. Anyone may fork it and maintain their own copy; upstream
+  OC Studio remains the place for features and fixes.
+
+Files added or substantially rewritten for Android are listed in
+PORTING.md, section "改动清单".
+
+Bundled assets with separate licenses
+------------------------------------
+  OC Serif (public/fonts/oc-serif.woff2)
+    A subset of Noto Serif SC, generated with scripts/fonts/subset.sh.
+    Noto Serif SC is Copyright (c) the Noto Project Authors,
+    licensed under the SIL Open Font License 1.1.
+    Full text: OFL.txt
+    The subset is redistributed under the same OFL 1.1 terms;
+    it is not sold separately.
+
+  App icon / launcher assets
+    Derived from upstream src-tauri/icons/* (same MIT license as the
+    rest of the upstream repository).
+
+  KaTeX fonts (_next/static/media/KaTeX_*.woff*) 
+    Bundled by the katex npm package; MIT. Shipped inside build output.
+
+Third-party dependencies
+------------------------
+The full list of direct dependencies and their licenses is maintained in
+src/components/settings/credits.ts and shown in the app under
+"Settings › About › Open-source licenses". Transitive dependencies follow
+their own licenses as recorded in package-lock.json.
+
+Trademarks
+----------
+No trademark rights are granted by the MIT license. No logo, profile, or
+name of the upstream authors may be used to imply endorsement of this port.

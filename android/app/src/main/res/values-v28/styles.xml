@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      Android 9（API 28）起才有「挖孔 / 刘海」这个概念。
+      这里让启动图和主界面都允许铺到挖孔区，真正的避让交给 WebView 的 safe-area
+      （原生把顶部内边距回传给前端，见 MainActivity 的 getSafeTopPx）。
+
+      这份比 values-v27 更具体（28 > 27），会覆盖那边的定义，所以 v27 里的
+      windowLightNavigationBar 也要一并带上 —— 运行时前端会按主题再改一次。
+    -->
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:background">@null</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="android:background">@drawable/splash</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

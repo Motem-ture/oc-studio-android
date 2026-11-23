@@ -1,0 +1,307 @@
+/**
+ * 模板组件参数 —— **契约与校验的唯一源**（`docs/模板.md §4` / §8.4）。
+ *
+ * 只登记**渲染器真的会消费**的参数：模板里能配、界面上能改、写进文件后能生效，
+ * 三件事必须同时成立。`npm run audit:templates` 用这里查「配了没反应」的漂移。
+ *
+ * 这份文件不 import React，脚本与渲染器都能直接读。
+ */
+import { isNoteTemplate } from './note'
+import { templateHostOf } from './support'
+import type { TemplateComponent, TemplateComponentId, TemplateDoc } from './types'
+
+export interface TemplateParamOption {
+  value: string | number | boolean
+  label: string
+}
+
+export type TemplateParamValue = string | number | boolean | string[]
+
+export interface TemplateParamDef {
+  key: string
+  label: string
+  /**
+   * `choice` = 行内分段按钮；
+   * `group` = 选中的基本信息组件 id（值域是用户数据，不在这里枚举）；
+   * `fields` = 字符串数组（旧的内联字段表，只读兼容）；
+   * `text` = 自由文本（正文预设的 Markdown。编辑器是独立配置面，不进编排行）
+   */
+  kind: 'choice' | 'group' | 'fields' | 'text'
+  /** 没写 / 写坏时的默认值（渲染器必须按同一个默认值走） */
+  fallback: TemplateParamValue
+  /** `choice` 的可选值；`fields` 为空 */
+  options: TemplateParamOption[]
+}
+
+/** 每个组件允许的参数。没登记的组件不给参数入口。 */
+export const TEMPLATE_PARAM_SCHEMA: Partial<Record<TemplateComponentId, TemplateParamDef[]>> = {
+  body: [
+    {
+      // 只存**选择**（正文组件 id），骨架在组件自己身上 —— 与 `info.group` 同一套设计
+      key: 'group',
+      label: '正文组件',
+      kind: 'group',
+      fallback: '',
+      options: [],
+    },
+  ],
+  info: [
+    {
+      key: 'group',
+      label: '基本信息组件',
+      kind: 'group',
+      fallback: '',
+      options: [],
+    },
+    {
+      key: 'fields',
+      label: '字段',
+      kind: 'fields',
+      fallback: [],
+      options: [],
+    },
+  ],
+  relations: [
+    {
+      key: 'presentation',
+      label: '呈现',
+      kind: 'choice',
+      fallback: 'table',
+      options: [
+        { value: 'table', label: '表格' },
+        { value: 'compact', label: '紧凑' },
+        { value: 'graph', label: '图' },
+      ],
+    },
+    {
+      key: 'title',
+      label: '标题',
+      kind: 'choice',
+      fallback: true,
+      options: [
+        { value: true, label: '显示' },
+        { value: false, label: '隐藏' },
+      ],
+    },
+  ],
+  gallery: [
+    {
+      key: 'mode',
+      label: '模式',
+      kind: 'choice',
+      fallback: 'grid',
+      options: [
+        { value: 'grid', label: '网格' },
+        { value: 'slider', label: '滑动' },
+      ],
+    },
+    {
+      key: 'columns',
+      label: '列',
+      kind: 'choice',
+      fallback: 4,
+      options: [2, 3, 4, 5].map((value) => ({ value, label: String(value) })),
+    },
+    {
+      key: 'title',
+      label: '标题',
+      kind: 'choice',
+      fallback: true,
+      options: [
+        { value: true, label: '显示' },
+        { value: false, label: '隐藏' },
+      ],
+    },
+  ],
+  image: [
+    {
+      key: 'width',
+      label: '宽度',
+      kind: 'choice',
+      fallback: 'full',
+      options: [
+        { value: 'full', label: '全宽' },
+        { value: 'half', label: '半宽' },
+      ],
+    },
+    {
+      key: 'title',
+      label: '标题',
+      kind: 'choice',
+      fallback: true,
+      options: [
+        { value: true, label: '显示' },
+        { value: false, label: '隐藏' },
+      ],
+    },
+  ],
+  summary: [
+    {
+      key: 'title',
+      label: '标题',
+      kind: 'choice',
+      fallback: true,
+      options: [
+        { value: true, label: '显示' },
+        { value: false, label: '隐藏' },
+      ],
+    },
+  ],
+}
+
+/**
+ * 标题文案（`label`）：空 = 用宿主给的默认文案（相册 / 关系 / 时间…）。
+ *
+ * 与 `title` 布尔分工：`title` 管显隐，`label` 管叫什么。旧模板只有 `title`，行为不变。
+ */
+const LABEL_PARAM: TemplateParamDef = {
+  key: 'label',
+  label: '标题文案',
+  kind: 'text',
+  fallback: '',
+  options: [],
+}
+
+// 有标题行的区块都能改文案；标签块固定叫「标签」，封面 / 头像 / 正文没有标题行。
+for (const id of ['relations', 'gallery', 'image', 'portrait', 'animation', 'summary'] as const) {
+  const defs = TEMPLATE_PARAM_SCHEMA[id]
+  if (defs !== undefined) defs.push({ ...LABEL_PARAM })
+}
+
+/** 读区块的标题文案；没设 / 设坏 = ''（渲染器据此回落默认文案） */
+export function componentLabel(component: TemplateComponent | undefined): string {
+  const value = component?.params?.label
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * 参数只对**真正消费它的模板**开放。
+ * 关系区块在角色 / 事件 / 国家三个编辑器里是同一套实现，所以三处都能改呈现。
+ * `info.group` 由「基本信息组件」选择器写、`lib/templates/fields.ts` 消费 ——
+ * 它现在对**任何笔记类模板**开放（见 `TEMPLATE_PARAM_ANY_NOTE`），
+ * 这里登记的是内置的那几个，脚本与不带 doc 的调用按它兜底。
+ */
+export const TEMPLATE_PARAM_SUPPORT: Partial<Record<TemplateComponentId, string[]>> = {
+  // 六个内置模板都含正文；自建笔记模板走 `TEMPLATE_PARAM_ANY_NOTE`
+  body: ['character', 'event', 'country', 'entry', 'pet', 'weapon'],
+  // 内置词条模板默认没有「基本信息」（字段来自按篇选的模板 / 组件，2026-11-09）；
+  // 用户给它加上这一块时，走 `TEMPLATE_PARAM_ANY_NOTE` 的 doc 分支
+  info: ['pet', 'weapon'],
+  relations: ['character', 'event', 'country'],
+  // 立绘 / 动画是角色专属组件
+  portrait: ['character'],
+  animation: ['character'],
+  gallery: ['character', 'event', 'country'],
+  summary: ['event', 'character', 'country'],
+}
+
+/**
+ * 「这个组件对任何笔记类模板都开放」—— 判断要带 doc（`isNoteTemplate`）。
+ *
+ * 为什么需要它：基本信息字段表、画廊 / 图片的呈现参数已经不是实体模板的专利，
+ * 用户在设置里新建的任何笔记类模板都该能声明。
+ * 硬编码一份 id 名单会漏掉自建模板，而且每接一个宿主就要改两处。
+ */
+export const TEMPLATE_PARAM_ANY_NOTE: Partial<Record<TemplateComponentId, boolean>> = {
+  body: true,
+  info: true,
+  relations: true,
+  gallery: true,
+  image: true,
+  summary: true,
+}
+
+export function templateAcceptsParam(
+  templateId: string,
+  componentId: TemplateComponentId,
+  doc?: TemplateDoc,
+): boolean {
+  const defs = TEMPLATE_PARAM_SCHEMA[componentId]
+  if (!defs || defs.length === 0) return false
+  const listed = TEMPLATE_PARAM_SUPPORT[componentId]?.includes(templateId) ?? false
+  if (TEMPLATE_PARAM_ANY_NOTE[componentId]) {
+    if (!doc) return listed
+    // 「任何笔记类模板」= **笔记宿主** + 含正文，不是「任何含正文的模板」——
+    // 角色 / 事件 / 国家也含正文，但它们的组件各有自己的数据源（基本信息没有组件库可换）。
+    // 这些实体模板在自己的 `TEMPLATE_PARAM_SUPPORT` 名单里照样能改（关系 / 画廊 / 简介 / 正文）。
+    if (templateHostOf(doc.id) === 'note' && isNoteTemplate(doc)) return true
+    return listed
+  }
+  return listed
+}
+
+/** 某个模板的某个组件能编的全部参数（含重参数；没有消费方时为空） */
+export function templateParamsFor(
+  templateId: string,
+  componentId: TemplateComponentId,
+  doc?: TemplateDoc,
+): TemplateParamDef[] {
+  if (!templateAcceptsParam(templateId, componentId, doc)) return []
+  return TEMPLATE_PARAM_SCHEMA[componentId] ?? []
+}
+
+/** 能在编排行里用分段按钮改的参数（字段表这类重参数不进轻量行） */
+export function inlineParamDefs(componentId: TemplateComponentId): TemplateParamDef[] {
+  return (TEMPLATE_PARAM_SCHEMA[componentId] ?? []).filter((def) => def.kind === 'choice')
+}
+
+/** 读参数：没写就按契约里的默认值，渲染器不要自己再写一遍字面量 */
+export function componentParam(component: TemplateComponent | undefined, key: string, fallback: boolean): boolean
+export function componentParam(component: TemplateComponent | undefined, key: string, fallback: number): number
+export function componentParam(component: TemplateComponent | undefined, key: string, fallback: string): string
+export function componentParam(component: TemplateComponent | undefined, key: string, fallback: string[]): string[]
+export function componentParam(
+  component: TemplateComponent | undefined,
+  key: string,
+  fallback: TemplateParamValue,
+): TemplateParamValue {
+  const value = component?.params?.[key]
+  return value === undefined ? fallback : value
+}
+
+/** 校验一份模板：参数键必须在契约里、值必须是允许的选项。返回人可读的错误。 */
+export function validateTemplateParams(doc: TemplateDoc): string[] {
+  const errors: string[] = []
+  for (const component of doc.components) {
+    const defs = TEMPLATE_PARAM_SCHEMA[component.id]
+    if (!component.params) continue
+    for (const [key, value] of Object.entries(component.params)) {
+      const def = defs?.find((item) => item.key === key)
+      if (!def) {
+        errors.push(`「${doc.name}」的「${component.id}」没有参数 ${key}`)
+        continue
+      }
+      if (!templateAcceptsParam(doc.id, component.id, doc)) {
+        errors.push(`「${doc.name}」的「${component.id}」不该有参数（渲染器未消费）`)
+        continue
+      }
+      if (def.kind === 'text') {
+        if (typeof value !== 'string') {
+          errors.push(`「${doc.name}」的「${component.id}.${key}」必须是文本`)
+        }
+        continue
+      }
+      if (def.kind === 'fields') {
+        const valid =
+          Array.isArray(value)
+            ? value.every((item) => typeof item === 'string' && item.trim() !== '')
+            : typeof value === 'string'
+        if (!valid) {
+          errors.push(`「${doc.name}」的「${component.id}.${key}」必须是字段名数组`)
+        }
+        continue
+      }
+      if (def.kind === 'group') {
+        // 值域是用户数据（组件 id），只校验形状；指向不存在的组件由读取侧回退
+        if (typeof value !== 'string' || value.trim() === '') {
+          errors.push(`「${doc.name}」的「${component.id}.${key}」必须是基本信息组件 id`)
+        }
+        continue
+      }
+      if (!def.options.some((option) => option.value === value)) {
+        errors.push(`「${doc.name}」的「${component.id}.${key}」值不合法：${String(value)}`)
+      }
+    }
+  }
+  return errors
+}

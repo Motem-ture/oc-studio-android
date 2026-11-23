@@ -1,0 +1,42 @@
+'use client'
+
+import { useSettingsTrigger } from '@/components/layout/SettingsTriggerContext'
+import { useProjectMeta } from '@/features/project'
+import { InspirationQuickNote } from '@/features/inspirations'
+import { MenuBarSearch } from './MenuBarSearch'
+import { MenuBarMenus } from './MenuBarMenus'
+import { WindowControls } from './WindowControls'
+
+/**
+ * 顶栏外壳：品牌按钮 + 菜单（`MenuBarMenus`）+ 搜索（`MenuBarSearch`）+ 灵感便签 + 窗口控制。
+ */
+export function MenuBar() {
+  const { openSettings } = useSettingsTrigger()
+  const { meta } = useProjectMeta()
+
+  return (
+    <nav
+      data-menubar
+      data-tauri-drag-region
+      className="max-md:hidden relative flex h-8 shrink-0 items-center justify-between bg-transparent px-3"
+    >
+      <div className="flex items-center gap-4">
+        <button
+          type="button"
+          onClick={() => openSettings('world')}
+          className="bg-transparent font-serif text-ui text-ink transparent-text transition-colors hover:bg-transparent hover:text-ink-muted"
+        >
+          {meta.worldName.trim() || 'OC Studio'}
+        </button>
+        <MenuBarMenus />
+      </div>
+
+      <MenuBarSearch />
+
+      <div className="flex items-center gap-1 -mr-3">
+        <InspirationQuickNote />
+        <WindowControls />
+      </div>
+    </nav>
+  )
+}

@@ -1,0 +1,193 @@
+'use client'
+
+import { useState, useEffect, useRef } from 'react'
+import { LayoutTemplate, FolderTree, Tag, ListTree } from 'lucide-react'
+import { useInputContextMenu } from '@/lib/use-input-context-menu'
+import { useProjectMeta } from '@/features/project'
+import { ImageUploader } from '@/components/shared/ImageUploader'
+import { TemplatesPanel } from '@/components/settings/TemplatesPanel'
+import { CategoriesPanel } from '@/components/settings/CategoriesPanel'
+import { ComponentsPanel } from '@/components/settings/ComponentsPanel'
+import { TagsPanel } from '@/features/tags/components/TagsPanel'
+import type { SettingsSection } from '@/components/layout/SettingsTriggerContext'
+import { SettingsEntryRow } from '@/components/settings/EntryRow'
+import { SettingsSubPage } from '@/components/settings/SubPage'
+
+type Panel = 'root' | SettingsSection
+
+/**
+ * 二级界面入口：图标 + 名称 + 箭头。
+ *
+ * 命名去掉了「自定义」前缀 —— 这四行的共同点是「世界怎么被组织起来」，
+ * `自定义` 只是其中两个的实现细节。带前缀和不带前缀混排，读起来像两个层级的东西。
+ * 图标只出现在**一级**的入口行上；进到二级页面以后标题就只是「返回 + 文字」，
+ * 同一个东西不在两级各标一次。
+ *
+ * 「主题」「关系图操作」不在这里：它们是外观 / 操作偏好，归**个性化**。
+ */
+const ENTRY_ITEMS: ReadonlyArray<{
+  panel: SettingsSection
+  label: string
+  icon: typeof ListTree
+}> = [
+  { panel: 'components', label: '组件', icon: ListTree },
+  { panel: 'templates', label: '模板', icon: LayoutTemplate },
+  { panel: 'categories', label: '分类', icon: FolderTree },
+  { panel: 'tags', label: '标签', icon: Tag },
+]
+
+export function WorldTab({
+  open,
+  section,
+  target,
+}: {
+  open: boolean
+  section?: SettingsSection
+  target?: string
+}) {
+  const { meta, loading: metaLoading, save: saveMeta } = useProjectMeta()
+  const worldNameRef = useInputContextMenu()
+  const taglineRef = useInputContextMenu()
+  /** 二级界面：组件 / 模板 / 分类 / 标签（都太长，不铺在一级页面上） */
+  const [panel, setPanel] = useState<Panel>(section ?? 'root')
+  /**
+   * 从模板里点「编辑这个组件」跳过来时的落点（`group:<id>` / `body:<id>`）。
+   *
+   * 走本地 state 而不是再调一次 `openSettings`：那一套要经过 AppShell 改 section、
+   * 再由 SettingsDialog 的 key 触发整棵 WorldTab 重挂 —— 在同一棵树里点一下，
+   * 最稳的是直接把 panel 换掉。
+   */
+  const [componentTarget, setComponentTarget] = useState<string | undefined>(undefined)
+  /** 跳过来之后「返回」回哪儿：从模板跳的就回模板，别把用户扔回组件列表 */
+  const [backTo, setBackTo] = useState<Panel>('root')
+
+  const [worldName, setWorldName] = useState('')
+  const [tagline, setTagline] = useState('')
+  const [coverUrl, setCoverUrl] = useState('')
+  const touchedRef = useRef(false)
+  useEffect(() => {
+    if (!open || metaLoading || touchedRef.current) return
+    setWorldName(meta.worldName)
+    setTagline(meta.tagline)
+    setCoverUrl(meta.coverUrl)
+  }, [open, metaLoading, meta])
+
+  // 关闭后重置「已编辑」标记，下次打开重新同步
+  useEffect(() => {
+    if (!open) touchedRef.current = false
+  }, [open])
+
+  if (panel === 'categories') {
+    return (
+      <SettingsSubPage title="分类" onBack={() => setPanel('root')}>
+        <CategoriesPanel />
+      </SettingsSubPage>
+    )
+  }
+
+  if (panel === 'components') {
+    return (
+      <SettingsSubPage
+        title="组件"
+        onBack={() => {
+          setPanel(backTo)
+          setBackTo('root')
+          setComponentTarget(undefined)
+        }}
+      >
+        <ComponentsPanel key={componentTarget ?? target ?? 'root'} target={componentTarget ?? target} />
+      </SettingsSubPage>
+    )
+  }
+
+  if (panel === 'tags') {
+    return (
+      <SettingsSubPage title="标签" onBack={() => setPanel('root')}>
+        <TagsPanel />
+      </SettingsSubPage>
+    )
+  }
+
+  if (panel === 'templates') {
+    return (
+      <SettingsSubPage title="模板" onBack={() => setPanel('root')}>
+        <TemplatesPanel
+          initialId={target}
+          onEditComponent={(next) => {
+            // 模板里那一行的设置键：直接换到组件页并带上落点，返回时回到模板
+            setComponentTarget(next)
+            setBackTo('templates')
+            setPanel('components')
+          }}
+        />
+      </SettingsSubPage>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1.5">
+        <label className="text-body leading-5 text-ink">世界名称</label>
+        <input
+          ref={worldNameRef}
+          type="text"
+          value={worldName}
+          onChange={(e) => {
+            touchedRef.current = true
+            setWorldName(e.target.value)
+            void saveMeta({ worldName: e.target.value })
+          }}
+          placeholder="例：雾海纪元"
+          className="h-8 w-full border-b border-line bg-transparent text-body leading-5 text-ink placeholder:text-ink-faint outline-none transition-colors focus:border-line-hover"
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label className="text-body leading-5 text-ink">简介</label>
+        <input
+          ref={taglineRef}
+          type="text"
+          value={tagline}
+          onChange={(e) => {
+            touchedRef.current = true
+            setTagline(e.target.value)
+            void saveMeta({ tagline: e.target.value })
+          }}
+          placeholder="例：被潮汐统治的群岛世界"
+          className="h-8 w-full border-b border-line bg-transparent text-body leading-5 text-ink placeholder:text-ink-faint outline-none transition-colors focus:border-line-hover"
+        />
+      </div>
+
+      <div className="flex flex-col items-center gap-1.5">
+        <span className="self-start text-body leading-5 text-ink">封面</span>
+        <ImageUploader
+          value={coverUrl}
+          onChange={(path) => {
+            touchedRef.current = true
+            setCoverUrl(path)
+            void saveMeta({ coverUrl: path })
+          }}
+          onRemove={() => {
+            touchedRef.current = true
+            setCoverUrl('')
+            void saveMeta({ coverUrl: '' })
+          }}
+          aspectRatio="3:2"
+          placeholderText="上传封面"
+          size="lg"
+        />
+      </div>
+
+      <div className="mt-2 flex flex-col border-t border-line">
+        {ENTRY_ITEMS.map((item) => (
+          <SettingsEntryRow
+            key={item.panel}
+            icon={item.icon}
+            label={item.label}
+            onClick={() => setPanel(item.panel)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,117 @@
+import type { Edge, Node } from '@xyflow/react'
+import { CharacterNode } from './CharacterNode'
+import { EventNode } from './EventNode'
+import { CountryNode } from './CountryNode'
+import { RelationEdge } from './RelationEdge'
+import { nodeRect, type EdgeSide } from './floating-edge'
+import type { RelationNodeType } from '../types'
+
+// 节点坐标不放这里：真源是实体（`graphPosition` → 仓库的 `graph_position`），
+// 没有坐标的节点由 layout.ts 的力导向布局现算。
+// 曾经用 localStorage 当缓存，结果旧版径向布局的坐标把整张图钉死、力导向永远不跑，已删。
+
+export const nodeTypes = {
+  characterNode: CharacterNode,
+  eventNode: EventNode,
+  countryNode: CountryNode,
+  // 分类条目用 3:2 卡片（封面是 3:2，塞进圆形头像会被裁掉两边）
+  worldNode: CountryNode,
+}
+
+export const edgeTypes = {
+  relationEdge: RelationEdge,
+}
+
+/* ── 拖拽连线 ────────────────────────────────────────────────
+   连线的**唯一语义表**：源类型 × 目标类型 → 落哪个字段、能不能起名。
+   写入侧照这张表走（见 services.createRelationBetween），不要另写一套判断。 */
+
+export interface RelationPlan {
+  /** 这一对节点能不能连线 */
+  supported: boolean
+  /** 固定关系名（成员关系，如「参与」）；缺省 = 由用户起名 */
+  fixedLabel?: string
+  /** 起名时的建议词（点一下填进输入框） */
+  presets: readonly string[]
+}
+
+const UNSUPPORTED: RelationPlan = { supported: false, presets: [] }
+
+const PAIR_PLANS: Record<string, RelationPlan> = {
+  'character:character': { supported: true, presets: ['亲属', '朋友', '敌人', '师徒', '恋人', '同僚'] },
+  'character:event': { supported: true, fixedLabel: '参与', presets: [] },
+  // 角色↔国家两边都写（国籍 + 国家的相关角色），画出来的边固定是「属于」
+  'character:country': { supported: true, fixedLabel: '属于', presets: [] },
+  'country:character': { supported: true, fixedLabel: '属于', presets: [] },
+  'event:character': { supported: true, fixedLabel: '参与', presets: [] },
+  'event:event': { supported: true, presets: ['前因', '后果', '相关', '延续'] },
+  // 事件↔国家同样两边都写（事件的国家 + 国家的相关事件）
+  'event:country': { supported: true, fixedLabel: '发生于', presets: [] },
+  'country:event': { supported: true, fixedLabel: '发生于', presets: [] },
+}
+
+/** 源 → 目标 这一对节点能建立什么关系（国家之间没有对应字段，不支持） */
+export function relationPlan(sourceType: RelationNodeType, targetType: RelationNodeType): RelationPlan {
+  return PAIR_PLANS[`${sourceType}:${targetType}`] ?? UNSUPPORTED
+}
+
+/** 一次待确认的连线：两端 + 该对的语义 */
+export interface RelationDraft {
+  source: { entityType: RelationNodeType; entityId: number; label: string }
+  target: { entityType: RelationNodeType; entityId: number; label: string }
+  plan: RelationPlan
+}
+
+/**
+ * 画布缩放的两道线（滑杆 / fitView / 画布三处共用）：
+ *
+ * - `MIN_ZOOM` 下限 0.2：**全景**要能把整张图塞进视口；到这一档头像已经看不清了，
+ *   所以同时低于 `LABEL_ZOOM` 时节点名整批淡出（CSS `[data-graph-labels='off']`）。
+ * - `LABEL_ZOOM` 0.7：低于它只留图形、不留字。40 个节点的名字挤在 0.6 倍下一片糊，
+ *   留着反而比不显示更难读。
+ */
+export const MIN_ZOOM = 0.2
+export const LABEL_ZOOM = 0.7
+
+/* ── 连线落点 ────────────────────────────────────────────────
+   节点四向都有手柄（见 *Node.tsx）。每条边按「目标在哪个方位」挑两端的手柄，
+   否则所有线都从正下方挤出来，贴着节点糊成一束。
+   几何唯一源是 `floating-edge.ts`（尺寸 / 求交 / 边型都在那边），这里只决定挂哪对手柄。 */
+
+export type HandleSide = EdgeSide
+
+function nodeCenter(node: Node): { x: number; y: number } {
+  const rect = nodeRect({
+    x: node.position.x,
+    y: node.position.y,
+    width: node.measured?.width,
+    height: node.measured?.height,
+    entityType: node.data?.entityType,
+  })
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+}
+
+/** 按两端节点的相对方位，给每条边挑一组手柄（横向为主走左右，纵向为主走上下） */
+export function routeEdges(nodes: Node[], edges: Edge[]): Edge[] {
+  if (nodes.length === 0) return edges
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  return edges.map((edge) => {
+    const source = byId.get(edge.source)
+    const target = byId.get(edge.target)
+    if (!source || !target) return edge
+    const a = nodeCenter(source)
+    const b = nodeCenter(target)
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    let sourceHandle: HandleSide
+    let targetHandle: HandleSide
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      sourceHandle = dx >= 0 ? 'right' : 'left'
+      targetHandle = dx >= 0 ? 'left' : 'right'
+    } else {
+      sourceHandle = dy >= 0 ? 'bottom' : 'top'
+      targetHandle = dy >= 0 ? 'top' : 'bottom'
+    }
+    return { ...edge, sourceHandle, targetHandle }
+  })
+}

@@ -1,0 +1,763 @@
+'use client'
+
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
+import { useNavigation } from '@/components/layout/NavigationContext'
+import { useNavigationSource } from '@/components/layout/NavigationSourceContext'
+import { useEditor } from '@/components/layout/EditorContext'
+import { useDevice } from '@/lib/use-device'
+import { useMobileNavigation } from '@/components/layout/MobileNavigationContext'
+import { useWordCount } from '@/components/layout/WordCountContext'
+import { useEntityNavigate } from '@/components/layout/EntityNavigateContext'
+import { useSaveStatus } from '@/components/layout/SaveStatusContext'
+import { useEventList, useEvent, useCreateEvent, useUpdateEvent, useDeleteEvent } from '@/features/events/hooks/useEvents'
+import { useCharacterList, useCreateCharacter, useDeleteCharacter } from '@/features/characters/hooks/useCharacters'
+import { useCreateCountry, useDeleteCountry } from '@/features/countries/hooks/useCountries'
+import type { EventFormData } from '@/features/events/types'
+import type { WorldEntry } from '@/types'
+import { toast } from 'sonner'
+import { db } from '@/lib/db'
+import { isMapEntry, isNovelEntry, isToolItem } from '@/lib/entry-kinds'
+import { isCategoryItem, categoryItemName } from '@/lib/categories/types'
+import { getCategories, loadCategories } from '@/lib/categories/store'
+import { newCharacterData, newCountryData, newEventData } from '@/lib/entity-defaults'
+
+export type EventView = { sub: 'list' } | { sub: 'editor'; eventId: number }
+export type CharacterView = { sub: 'list' } | { sub: 'editor'; characterId: number }
+export type CountryView = { sub: 'list' } | { sub: 'editor'; countryId: number }
+const PLACEHOLDER_MAP: Record<string, string> = {}
+
+/**
+ * 工作台编排层：视图路由（列表 ⇄ 编辑器）、跨实体返回栈、未保存守卫、滑动动画、
+ * 词数上报，以及四类实体的取数与增删改。page.tsx 只保留渲染。
+ *
+ * 抽出来的原因：page.tsx 曾把它和渲染混在一起共 770 行 —— 「编排」与「长什么样」
+ * 是两件事，且编排部分是唯一需要理解返回栈/守卫时序的地方。
+ */
+export function useEntityWorkspace() {  const { activeItem: desktopActiveItem, setActiveItem } = useNavigation()
+  const { source, setSource, clearSource } = useNavigationSource()
+  const { setEditing, clearEditing, entityType, entityId } = useEditor()
+  const { isMobile } = useDevice()
+  const mobileNav = useMobileNavigation()
+  const activeItem = isMobile
+    ? (mobileNav.section === 'gallery'
+        ? ({ characters: '角色', events: '事件', countries: '国家' } as const)[mobileNav.gallerySubTab]
+        : mobileNav.section === 'wiki' ? '世界观'
+        : mobileNav.section === 'timeline' ? '时间线'
+        : mobileNav.section === 'relations' ? '关系图'
+        : mobileNav.section === 'album' ? '相册'
+        : mobileNav.section === 'novel' ? '小说'
+        : mobileNav.section === 'map' ? '地图'
+        : mobileNav.section === 'tree' ? '表格'
+        : mobileNav.section === 'category' ? desktopActiveItem
+        : mobileNav.section === 'home' ? null
+        : desktopActiveItem)
+    : desktopActiveItem
+  const mobileSetSection = mobileNav.setSection
+  const mobileSetGallerySubTab = mobileNav.setGallerySubTab
+  const [eventView, setEventView] = useState<EventView>({ sub: 'list' })
+  const [characterView, setCharacterView] = useState<CharacterView>({ sub: 'list' })
+  const [countryView, setCountryView] = useState<CountryView>({ sub: 'list' })
+  const [worldSelectedEntryId, setWorldSelectedEntryId] = useState<number | null>(null)
+  // 分类条目的定位指令：`[[内链]]` / @ 引用指向「宠物」里的一条时，切到那个分类并打开它
+  const [categoryEntryTarget, setCategoryEntryTarget] = useState<{
+    item: string
+    entryId: number
+    nonce: number
+  } | null>(null)
+  const categoryNonceRef = useRef(0)
+  // `[[章节]]` / `[[小说]]` 的目标：小说分区收到后沿 parentId 找书根、打开书并选中该章。
+  // nonce 让「连续点同一章」也能再次触发定位（id 不变时 state 不会重渲染）。
+  const [novelEntryTarget, setNovelEntryTarget] = useState<{
+    entryId: number
+    nonce: number
+  } | null>(null)
+
+  const crossBackRef = useRef<{
+    activeItem: string | null
+    eventView: EventView
+    characterView: CharacterView
+    countryView: CountryView
+    source: ReturnType<typeof useNavigationSource>['source']
+    mobileSection?: import('@/components/layout/MobileNavigationContext').MobileSection
+    mobileGallerySubTab?: import('@/components/layout/MobileNavigationContext').GallerySubTab
+  } | null>(null)
+
+  // 从编辑器/图谱/相册/世界观跳走前记录返回现场（返回时恢复）
+  const rememberCrossBack = useCallback(() => {
+    if (
+      eventView.sub === 'editor' ||
+      characterView.sub === 'editor' ||
+      countryView.sub === 'editor' ||
+      activeItem === '关系图' ||
+      activeItem === '相册' ||
+      activeItem === '世界观'
+    ) {
+      crossBackRef.current = {
+        activeItem,
+        eventView,
+        characterView,
+        countryView,
+        source,
+        mobileSection: mobileNav.section,
+        mobileGallerySubTab: mobileNav.gallerySubTab,
+      }
+    }
+  }, [eventView, characterView, countryView, activeItem, source, mobileNav.section, mobileNav.gallerySubTab])
+
+  const { setActiveEntity, status: saveStatus, resetStatus } = useSaveStatus()
+  useEffect(() => {
+    const nextType =
+      activeItem === '事件' ? 'event'
+      : activeItem === '角色' ? 'character'
+      : activeItem === '国家' ? 'country'
+      : activeItem === '世界观' ? 'world'
+      : null
+    setActiveEntity(nextType)
+    /**
+     * 切到**另一个**分区时，把上一个编辑器的上下文收掉。
+     *
+     * 角色 / 事件 / 国家的编辑器切换分区后只是被 CSS 隐藏、仍挂在树上，`entityType`
+     * 还停在它身上 —— 于是它的「未保存」会挂到新页面上（状态栏写未保存、离开时弹
+     * 「有未保存的更改吗」），而那个页面什么都没改。只有切到同一类型分区才保留。
+     */
+    if (entityType !== null && nextType !== entityType) {
+      clearEditing()
+      resetStatus()
+    }
+  }, [activeItem, entityType, setActiveEntity, clearEditing, resetStatus])
+
+  // 编辑器实体切换（进入/离开/跨实体跳转）时重置全局保存状态，
+  // 防止上一个编辑器的 dirty 残留导致新编辑器出现「未保存」误报。
+  // 注意：父级 effect 在子编辑器挂载 effect 之后运行，可顺带清掉挂载期噪声。
+  useEffect(() => {
+    resetStatus()
+  }, [entityType, entityId, resetStatus])
+
+  const saveStatusRef = useRef(saveStatus)
+  // 只在 confirmLeave 里被读（事件处理器），按 React 规则不在 render 期写 ref
+  useLayoutEffect(() => {
+    saveStatusRef.current = saveStatus
+  }, [saveStatus])
+  const [leaveConfirm, setLeaveConfirm] = useState<{ open: boolean; onConfirm: (() => void) | null }>({
+    open: false,
+    onConfirm: null,
+  })
+
+  // 有未保存改动时先弹 AlertDialog 确认，确认后执行 action
+  const confirmLeave = useCallback((action: () => void) => {
+    if (saveStatusRef.current !== 'dirty') {
+      action()
+    } else {
+      setLeaveConfirm({ open: true, onConfirm: action })
+    }
+  }, [])
+
+  // Slide animation tracking for editor↔list transitions
+  const prevEventSub = useRef(eventView.sub)
+  const prevCharSub = useRef(characterView.sub)
+  const prevCountrySub = useRef(countryView.sub)
+  type SlideAnim = 'to-editor' | 'to-list' | null
+  const [eventSlide, setEventSlide] = useState<SlideAnim>(null)
+  const [charSlide, setCharSlide] = useState<SlideAnim>(null)
+  const [countrySlide, setCountrySlide] = useState<SlideAnim>(null)
+
+  useEffect(() => {
+    const prev = prevEventSub.current
+    const curr = eventView.sub
+    if (prev !== curr) {
+      setEventSlide(curr === 'editor' ? 'to-editor' : 'to-list')
+      const t = setTimeout(() => setEventSlide(null), 150)
+      prevEventSub.current = curr
+      return () => clearTimeout(t)
+    }
+  }, [eventView.sub])
+
+  useEffect(() => {
+    const prev = prevCharSub.current
+    const curr = characterView.sub
+    if (prev !== curr) {
+      setCharSlide(curr === 'editor' ? 'to-editor' : 'to-list')
+      const t = setTimeout(() => setCharSlide(null), 150)
+      prevCharSub.current = curr
+      return () => clearTimeout(t)
+    }
+  }, [characterView.sub])
+
+  useEffect(() => {
+    const prev = prevCountrySub.current
+    const curr = countryView.sub
+    if (prev !== curr) {
+      setCountrySlide(curr === 'editor' ? 'to-editor' : 'to-list')
+      const t = setTimeout(() => setCountrySlide(null), 150)
+      prevCountrySub.current = curr
+      return () => clearTimeout(t)
+    }
+  }, [countryView.sub])
+
+  const {
+    events,
+    loading: eventsLoading,
+    error: eventsError,
+    refresh: refreshEvents,
+  } = useEventList()
+
+  const currentEventId = useMemo(
+    () => (eventView.sub === 'editor' ? eventView.eventId : null),
+    [eventView],
+  )
+
+  const { event: selectedEvent, refresh: refreshEvent } = useEvent(currentEventId)
+  const { createEvent, creating } = useCreateEvent()
+  const { updateEvent, updating } = useUpdateEvent()
+  const { deleteEvent, deleting } = useDeleteEvent()
+
+  const {
+    characters,
+    loading: charactersLoading,
+    error: charactersError,
+    refresh: refreshCharacters,
+  } = useCharacterList()
+
+  const { createCharacter, creating: creatingChar } = useCreateCharacter()
+  const { deleteCharacter, deleting: deletingChar } = useDeleteCharacter()
+
+  const { createCountry, creating: creatingCountry } = useCreateCountry()
+  const { deleteCountry, deleting: deletingCountry } = useDeleteCountry()
+
+  const handleSelectEvent = useCallback((id: number) => {
+    setSource('eventList')
+    setEventView({ sub: 'editor', eventId: id })
+    setEditing('event', id)
+  }, [setSource, setEditing])
+
+  const handleCreateEvent = useCallback(() => {
+    if (creating) return
+    const doCreate = () => {
+      createEvent(newEventData()).then((id) => {
+        rememberCrossBack()
+        setEventView({ sub: 'editor', eventId: id })
+        setActiveItem('事件')
+        if (isMobile) {
+          mobileSetSection('gallery')
+          mobileSetGallerySubTab('events')
+        }
+        setEditing('event', id)
+        clearSource()
+        refreshEvents()
+      }).catch(() => {
+        // error handled via hook
+      })
+    }
+    confirmLeave(doCreate)
+  }, [createEvent, creating, refreshEvents, setEditing, confirmLeave, rememberCrossBack, setActiveItem, isMobile, mobileSetSection, mobileSetGallerySubTab, clearSource])
+
+  const handleSaveEvent = useCallback(
+    async (id: number, data: Partial<EventFormData>) => {
+      if (updating) return
+      await updateEvent(id, data)
+      refreshEvents()
+      refreshEvent()
+    },
+    [updateEvent, updating, refreshEvents, refreshEvent],
+  )
+
+  const handleDeleteEvent = useCallback(
+    (id: number): Promise<void> => {
+      if (deleting) return Promise.resolve()
+      // 同角色：把 promise 交给调用方，由它决定「成功才报已移至回收站」
+      return deleteEvent(id).then(() => {
+        refreshEvents()
+      })
+    },
+    [deleteEvent, deleting, refreshEvents],
+  )
+
+  const restoreCrossBack = useCallback(() => {
+    const saved = crossBackRef.current
+    if (!saved) return false
+    // 返回键只回“上一级页面”，不回上一个角色/事件：
+    // 若来源本身是另一个实体编辑器（通过关系/@/内链跳转），这次返回落到当前列表即可。
+    const fromOtherEditor =
+      saved.eventView.sub === 'editor' ||
+      saved.characterView.sub === 'editor' ||
+      saved.countryView.sub === 'editor'
+    if (fromOtherEditor) {
+      crossBackRef.current = null
+      return false
+    }
+    crossBackRef.current = null
+    setEventView(saved.eventView)
+    setCharacterView(saved.characterView)
+    setCountryView(saved.countryView)
+    if (saved.activeItem) {
+      setActiveItem(saved.activeItem)
+    }
+    if (saved.source) {
+      setSource(saved.source)
+    } else {
+      clearSource()
+    }
+    if (saved.mobileSection) {
+      mobileSetSection(saved.mobileSection)
+    }
+    if (saved.mobileGallerySubTab) {
+      mobileSetGallerySubTab(saved.mobileGallerySubTab)
+    }
+    const restoredView = saved.eventView.sub === 'editor' || saved.characterView.sub === 'editor' || saved.countryView.sub === 'editor'
+    if (restoredView) {
+      if (saved.eventView.sub === 'editor') setEditing('event', saved.eventView.eventId)
+      else if (saved.characterView.sub === 'editor') setEditing('character', saved.characterView.characterId)
+      else if (saved.countryView.sub === 'editor') setEditing('country', saved.countryView.countryId)
+    }
+    return true
+  }, [setActiveItem, setSource, clearSource, mobileSetSection, mobileSetGallerySubTab, setEditing])
+
+  const handleBackToList = useCallback(() => {
+    confirmLeave(() => {
+      const el = document.activeElement as HTMLElement | null
+      el?.blur()
+      // 延迟导航，让 blur 和键盘收起动画先完成，避免 editor display:none 与 TipTap blur 清理冲突
+      const doNav = () => {
+        clearEditing()
+        if (restoreCrossBack()) return
+        if (source === 'timeline') {
+          setEventView({ sub: 'list' })
+          setActiveItem('时间线')
+          if (isMobile) {
+            mobileSetSection('timeline')
+          }
+        } else {
+          setEventView({ sub: 'list' })
+        }
+        clearSource()
+      }
+      // 使用 setTimeout 而非 rAF：键盘收起是异步动画，rAF 太早
+      setTimeout(doNav, 50)
+    })
+  }, [source, setActiveItem, clearSource, restoreCrossBack, clearEditing, isMobile, mobileSetSection, confirmLeave])
+
+  const handleSelectCharacter = useCallback((id: number) => {
+    setSource('characterList')
+    setCharacterView({ sub: 'editor', characterId: id })
+    setEditing('character', id)
+  }, [setSource, setEditing])
+
+  const handleCreateCharacter = useCallback(() => {
+    if (creatingChar) return
+    const doCreate = () => {
+      createCharacter(newCharacterData()).then((id) => {
+        rememberCrossBack()
+        setCharacterView({ sub: 'editor', characterId: id })
+        setActiveItem('角色')
+        if (isMobile) {
+          mobileSetSection('gallery')
+          mobileSetGallerySubTab('characters')
+        }
+        setEditing('character', id)
+        clearSource()
+        refreshCharacters()
+      }).catch(() => {
+        // error handled via hook
+      })
+    }
+    confirmLeave(doCreate)
+  }, [createCharacter, creatingChar, refreshCharacters, setEditing, confirmLeave, rememberCrossBack, setActiveItem, isMobile, mobileSetSection, mobileSetGallerySubTab, clearSource])
+
+  const handleBackToCharacterList = useCallback(() => {
+    confirmLeave(() => {
+      (document.activeElement as HTMLElement | null)?.blur()
+      clearEditing()
+      if (restoreCrossBack()) return
+      setCharacterView({ sub: 'list' })
+      refreshCharacters()
+      clearSource()
+    })
+  }, [refreshCharacters, clearSource, restoreCrossBack, clearEditing, confirmLeave])
+
+  const handleDeleteCharacter = useCallback(
+    (id: number): Promise<void> => {
+      if (deletingChar) return Promise.resolve()
+      // 把 promise 交出去：调用方（DeleteButton）要等结果才报「已移至回收站」。
+      // 失败信息由 QueryClient 的默认 onError 统一提示，这里不再静默 catch。
+      return deleteCharacter(id).then(() => {
+        refreshCharacters()
+      })
+    },
+    [deleteCharacter, deletingChar, refreshCharacters],
+  )
+
+  const handleCreateCountry = useCallback(() => {
+    if (creatingCountry) return
+    const doCreate = () => {
+      createCountry(newCountryData()).then((id) => {
+        rememberCrossBack()
+        setCountryView({ sub: 'editor', countryId: id })
+        setActiveItem('国家')
+        if (isMobile) {
+          mobileSetSection('gallery')
+          mobileSetGallerySubTab('countries')
+        }
+        setEditing('country', id)
+        clearSource()
+      }).catch(() => {
+        // error handled via hook
+      })
+    }
+    confirmLeave(doCreate)
+  }, [createCountry, creatingCountry, setEditing, confirmLeave, rememberCrossBack, setActiveItem, isMobile, mobileSetSection, mobileSetGallerySubTab, clearSource])
+
+  // 命令面板「快速新建」事件监听
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const type = (e as CustomEvent).detail?.type
+      if (type === 'character') handleCreateCharacter()
+      else if (type === 'event') handleCreateEvent()
+      else if (type === 'country') handleCreateCountry()
+    }
+    window.addEventListener('oc:create-entity', handler)
+    return () => window.removeEventListener('oc:create-entity', handler)
+  }, [handleCreateCharacter, handleCreateEvent, handleCreateCountry])
+
+  const handleDeleteCountry = useCallback(
+    (id: number): Promise<void> => {
+      if (deletingCountry) return Promise.resolve()
+      return deleteCountry(id)
+    },
+    [deleteCountry, deletingCountry],
+  )
+
+  const handleSelectCountry = useCallback((id: number) => {
+    setSource('countryList')
+    setCountryView({ sub: 'editor', countryId: id })
+    setEditing('country', id)
+  }, [setSource, setEditing])
+
+  const handleBackToCountryList = useCallback(() => {
+    confirmLeave(() => {
+      (document.activeElement as HTMLElement | null)?.blur()
+      clearEditing()
+      if (restoreCrossBack()) return
+      setCountryView({ sub: 'list' })
+      clearSource()
+    })
+  }, [clearSource, restoreCrossBack, clearEditing, confirmLeave])
+
+  const handleTimelineSelectEvent = useCallback(
+    (id: number) => {
+      setSource('timeline')
+      setEventView({ sub: 'editor', eventId: id })
+      setActiveItem('事件')
+      if (isMobile) {
+        mobileSetSection('gallery')
+        mobileSetGallerySubTab('events')
+      }
+      setEditing('event', id)
+    },
+    [setSource, setActiveItem, setEditing, isMobile, mobileSetSection, mobileSetGallerySubTab],
+  )
+
+  /** 从时间线的「出生」节点进角色：来源记成 timeline，返回时回到时间线而不是角色列表 */
+  const handleTimelineSelectCharacter = useCallback(
+    (id: number) => {
+      setSource('timeline')
+      setCharacterView({ sub: 'editor', characterId: id })
+      setActiveItem('角色')
+      if (isMobile) {
+        mobileSetSection('gallery')
+        mobileSetGallerySubTab('characters')
+      }
+      setEditing('character', id)
+    },
+    [setSource, setActiveItem, setEditing, isMobile, mobileSetSection, mobileSetGallerySubTab],
+  )
+
+  /**
+   * 这条 `worldEntries` 行是不是某个分类的条目？是就返回要切到的导航键。
+   * 分类条目不在世界观目录树里（`getEntries` 已过滤），直接当词条打开会落到空树。
+   */
+  const resolveCategoryTarget = useCallback(async (id: number): Promise<{ item: string; entryId: number } | null> => {
+    try {
+      const row = await db.worldEntries.get(id)
+      const name = row?.category?.trim() ?? ''
+      if (!row || row.deleted || name === '') return null
+      await loadCategories()
+      const category = getCategories().find((item) => item.name === name)
+      return category ? { item: categoryItemName(category.id), entryId: id } : null
+    } catch {
+      return null
+    }
+  }, [])
+
+  const handleRelatedItemNavigate = useCallback((id: number, type?: string) => {
+    // 同类型实体间跳转会因 key 变化重挂编辑器 → 未保存改动会丢失，需确认
+    const willRemount =
+      (type === 'character' && characterView.sub === 'editor') ||
+      (type === 'event' && eventView.sub === 'editor') ||
+      (type === 'country' && countryView.sub === 'editor')
+
+    const doNavigate = async () => {
+      rememberCrossBack()
+
+      if (type === 'character') {
+        setCharacterView({ sub: 'editor', characterId: id })
+        setActiveItem('角色')
+        if (isMobile) {
+          mobileSetSection('gallery')
+          mobileSetGallerySubTab('characters')
+        }
+        setEditing('character', id)
+        clearSource()
+      } else if (type === 'event') {
+        setEventView({ sub: 'editor', eventId: id })
+        setActiveItem('事件')
+        if (isMobile) {
+          mobileSetSection('gallery')
+          mobileSetGallerySubTab('events')
+        }
+        setEditing('event', id)
+        clearSource()
+      } else if (type === 'country') {
+        setCountryView({ sub: 'editor', countryId: id })
+        setActiveItem('国家')
+        if (isMobile) {
+          mobileSetSection('gallery')
+          mobileSetGallerySubTab('countries')
+        }
+        setEditing('country', id)
+        clearSource()
+      } else if (type === 'world') {
+        const categoryTarget = await resolveCategoryTarget(id)
+        if (categoryTarget) {
+          categoryNonceRef.current += 1
+          setCategoryEntryTarget({ ...categoryTarget, nonce: categoryNonceRef.current })
+          setActiveItem(categoryTarget.item)
+          if (isMobile) mobileSetSection('category')
+          clearSource()
+          return
+        }
+        setWorldSelectedEntryId(id)
+        setActiveItem('世界观')
+        if (isMobile) {
+          mobileSetSection('wiki')
+        }
+        clearSource()
+      }
+    }
+
+    if (willRemount) confirmLeave(() => void doNavigate())
+    else void doNavigate()
+  }, [eventView, characterView, countryView, setActiveItem, clearSource, setEditing, isMobile, mobileSetSection, mobileSetGallerySubTab, confirmLeave, rememberCrossBack, resolveCategoryTarget])
+
+  const handleMentionClick = useCallback((id: string, entityType?: string) => {
+    const numId = Number(id)
+    if (Number.isNaN(numId)) return
+    handleRelatedItemNavigate(numId, entityType)
+  }, [handleRelatedItemNavigate])
+
+  const wikiLinkNonceRef = useRef(0)
+
+  /**
+   * `[[内链]]` 统一入口：先查这条笔记是什么，再决定去哪个分区。
+   *
+   * 章节 / 小说根、地图也是 `worldEntries` 的行 —— 早先一律当「世界观词条」打开，
+   * 结果落到一个空的目录树里。目标行不在（已被彻底删除 / 指向了不存在的 id）时
+   * 必须给一句话，不能静默什么都不发生。
+   */
+  const handleWikiLinkClick = useCallback(
+    async (id: string) => {
+      const numId = Number(id)
+      if (!Number.isInteger(numId) || numId <= 0) {
+        toast.error('条目不存在')
+        return
+      }
+      let entry: WorldEntry | undefined = undefined
+      try {
+        entry = await db.worldEntries.get(numId)
+      } catch {
+        entry = undefined
+      }
+      if (!entry || entry.deleted) {
+        toast.error('条目不存在')
+        return
+      }
+
+      if (isNovelEntry(entry)) {
+        wikiLinkNonceRef.current += 1
+        setNovelEntryTarget({ entryId: numId, nonce: wikiLinkNonceRef.current })
+        setActiveItem('小说')
+        if (isMobile) mobileSetSection('novel')
+        clearSource()
+        return
+      }
+
+      if (isMapEntry(entry)) {
+        setActiveItem('地图')
+        if (isMobile) mobileSetSection('map')
+        clearSource()
+        return
+      }
+
+      handleRelatedItemNavigate(numId, 'world')
+    },
+    [
+      clearSource,
+      handleRelatedItemNavigate,
+      isMobile,
+      mobileSetSection,
+      setActiveItem,
+    ],
+  )
+
+  const clearNovelEntryTarget = useCallback(() => setNovelEntryTarget(null), [])
+
+  const clearWorldSelectedEntry = useCallback(() => {
+    setWorldSelectedEntryId(null)
+  }, [])
+
+  const clearCategoryEntryTarget = useCallback(() => {
+    setCategoryEntryTarget(null)
+  }, [])
+
+  const showEvents = activeItem === '事件'
+  const showCharacters = activeItem === '角色'
+  const showCountries = activeItem === '国家'
+  const showWorld = activeItem === '世界观'
+  const showTimeline = activeItem === '时间线'
+  const showNovel = activeItem === '小说'
+  const showTreeTable = activeItem === '表格'
+  const showMap = activeItem === '地图'
+  const showRelations = activeItem === '关系图'
+  const showAlbum = activeItem === '相册'
+  // 工具页（工具:<插件 id>）**不算占位**：它有自己的面板，漏掉这一项就会把
+// 「功能开发中...」盖在插件界面上（地图生成器的预览区就是这么被挡住的）。
+  const showPlaceholder =
+    activeItem !== null &&
+    !showEvents &&
+    !showCharacters &&
+    !showCountries &&
+    !showWorld &&
+    !showTimeline &&
+    !showRelations &&
+    !showAlbum &&
+    !showNovel &&
+    !showTreeTable &&
+    !showMap &&
+    !isCategoryItem(activeItem) &&
+    !isToolItem(activeItem)
+  const placeholderText = activeItem !== null
+    ? (PLACEHOLDER_MAP[activeItem] ?? '功能开发中...')
+    : null
+
+  const { setWordCount } = useWordCount()
+
+  const eventCountRef = useRef(0)
+  const characterCountRef = useRef(0)
+  const countryCountRef = useRef(0)
+  const worldCountRef = useRef(0)
+
+  const handleEventCharCount = useCallback((count: number) => {
+    eventCountRef.current = count
+    setWordCount(count)
+  }, [setWordCount])
+
+  const handleCharacterCharCount = useCallback((count: number) => {
+    characterCountRef.current = count
+    setWordCount(count)
+  }, [setWordCount])
+
+  const handleCountryCharCount = useCallback((count: number) => {
+    countryCountRef.current = count
+    setWordCount(count)
+  }, [setWordCount])
+
+  const handleWorldCharCount = useCallback((count: number) => {
+    worldCountRef.current = count
+    setWordCount(count)
+  }, [setWordCount])
+
+  useEffect(() => {
+    if (showEvents && eventView.sub === 'editor') setWordCount(eventCountRef.current)
+    else if (showCharacters && characterView.sub === 'editor') setWordCount(characterCountRef.current)
+    else if (showCountries && countryView.sub === 'editor') setWordCount(countryCountRef.current)
+    else if (showWorld) setWordCount(worldCountRef.current)
+    else setWordCount(0)
+  }, [showEvents, showCharacters, showCountries, showWorld, eventView, characterView, countryView, setWordCount])
+
+  const { setNavigateHandler } = useEntityNavigate()
+
+  useEffect(() => {
+    setNavigateHandler((id: number, type: string) => {
+      handleRelatedItemNavigate(id, type)
+    })
+  }, [setNavigateHandler, handleRelatedItemNavigate])
+
+  return {
+    activeItem,
+    characters,
+    charactersError,
+    charactersLoading,
+    characterView,
+    charSlide,
+    categoryEntryTarget,
+    clearCategoryEntryTarget,
+    countrySlide,
+    countryView,
+    events,
+    eventsError,
+    eventSlide,
+    eventsLoading,
+    eventView,
+    handleBackToCharacterList,
+    handleBackToCountryList,
+    handleBackToList,
+    clearWorldSelectedEntry,
+    clearNovelEntryTarget,
+    handleCharacterCharCount,
+    handleCountryCharCount,
+    handleCreateCharacter,
+    handleCreateCountry,
+    handleCreateEvent,
+    handleDeleteCharacter,
+    handleDeleteCountry,
+    handleDeleteEvent,
+    handleEventCharCount,
+    handleMentionClick,
+    handleRelatedItemNavigate,
+    handleSaveEvent,
+    handleSelectCharacter,
+    handleSelectCountry,
+    handleSelectEvent,
+    handleTimelineSelectCharacter,
+    handleTimelineSelectEvent,
+    handleWikiLinkClick,
+    handleWorldCharCount,
+    leaveConfirm,
+    novelEntryTarget,
+    placeholderText,
+    /**
+     * 列表加载失败时的「重试」走这两个（数据 hook 的 `refetch`）。
+     * 别再把「重试」接到 onCreate* 上 —— 那会新建一个空实体。
+     */
+    refreshCharacters,
+    refreshEvents,
+    selectedEvent,
+    setActiveItem,
+    setLeaveConfirm,
+    setSource,
+    showAlbum,
+    showNovel,
+    showTreeTable,
+    showMap,
+    showCharacters,
+    showCountries,
+    showEvents,
+    showPlaceholder,
+    showRelations,
+    showTimeline,
+    showWorld,
+    worldSelectedEntryId,
+  }
+}
+
+
+

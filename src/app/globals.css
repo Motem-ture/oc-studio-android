@@ -1,0 +1,1264 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* 助手插件自带的样式表：已在生成时收进 `.oc-agent-root` 作用域，不会泄进宿主。
+   生成脚本 `scripts/scope-plugin-css.mjs`，上游更新时重跑即可。 */
+@import "../plugins/agent/styles/agent-scoped.css";
+@import "../plugins/agent/styles/markdown-scoped.css";
+
+/* 自动内容扫描不要进构建产物：Tauri target / Android build 里是几十 MB 的二进制和压缩 JS，
+   扫进来会把 Tailwind 的 PostCSS 进程撑到 OOM（它们也不产生任何类名）。 */
+@source not "../../src-tauri";
+@source not "../../android";
+@source not "../../out";
+@source not "../../.next";
+
+@custom-variant dark (&:is(.dark *));
+
+/* 标题衬线字体（思源宋体 / Noto Serif SC 子集，OFL）。
+   2026-11-15 起**随仓库打包**：`public/fonts/oc-serif.woff2`，1.35 MB。
+   字表是 GB2312 一级汉字 3755 + ASCII + CJK 标点（`scripts/fonts/charset.txt`，见 docs/衬线字体.md）。
+   单文件**可变字重**（wght 200–900）—— 比拆成 600 / 700 两份静态档（2.2 MB）小，
+   而且 400 / 500 也是真字重：正文衬线标题（`.tiptap h1/h2` 的 400、`h3` 的 500）
+   不会被吸到最近的一档去。 */
+@font-face {
+  font-family: 'OC Serif';
+  src: url('/fonts/oc-serif.woff2') format('woff2');
+  font-weight: 200 900;
+  font-display: swap;
+}
+
+:root {
+  --oc-paper: #FEFCF8;
+  --oc-paper-alt: #FAF7F2;
+  --oc-paper-card: #F3EFE9;
+  --oc-line: #E7E3DC;
+  --oc-line-hover: #D6D0C4;
+  /* 半透明的线：外壳铺在模糊 / 背景图上时，实色的线会突然「变亮」一截 */
+  --oc-line-soft: color-mix(in oklab, var(--oc-line) 45%, transparent);
+  --oc-ink: #2B2B2B;
+  --oc-ink-muted: #6E6A63;
+  --oc-ink-faint: #A5A098;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* 动效令牌（唯一源：时长三档 + 缓动一档）
+     界面里不再写 `duration-150` 这类数字工具类 —— `npm run audit:design` 的
+     motion-literal 会拦。三档对应：fast = 悬停 / 淡入，base = 展开 / 位移，
+    慢速只给「整块滑出」这种大位移（抽屉 / 轮播）。 */
+  --oc-duration-fast: 150ms;
+  --oc-duration-base: 200ms;
+  --oc-duration-slow: 300ms;
+  --oc-ease-quiet: cubic-bezier(0.2, 0.6, 0.2, 1);
+
+  /* 旧名保留：助手插件的样式表（`src/plugins/agent/styles/*.css`）还在用，
+     值指向新令牌，改节奏只改上面一处。 */
+  --dur-fast: var(--oc-duration-fast);
+  --dur-base: var(--oc-duration-base);
+  --ease-quiet: var(--oc-ease-quiet);
+
+  /* 控件悬停底色（界面无色：只用墨色极低透明度） */
+  --oc-hover: rgba(43, 43, 43, 0.045);
+
+  /* 正文选区底色（::selection）—— 走令牌才会跟主题预设一起变 */
+  --oc-selection: rgba(107, 102, 93, 0.25);
+
+  /* 弹窗遮罩（scrim）—— 与原来写死的 bg-black/15 dark:bg-black/40 **取值完全一致**，
+     只是收成一处：以后要调只改这里。组件里不要再直接写 bg-black/xx。 */
+  --oc-scrim: rgba(0, 0, 0, 0.15);
+
+  /* 固定墨色 —— **不随主题翻转**。只给「底色固定」的色块用（如时间线的时期条）：
+     底色不跟着主题走，文字就不能跟着翻，否则暗色下浅底会配上浅字。 */
+  --oc-ink-fixed: #2B2B2B;
+  --oc-paper-fixed: #FEFCF8;
+
+  /* 危险操作的浅底（hover / 选中）：亮色是极淡的粉，暗色是极淡的同一枚红 */
+  --oc-error-light: #FBF2EF;
+
+  /* 语义色：错误 / 警告 / 成功。**同一枚在亮暗两套里都成立**，
+     插件（助手）也直接取这三个名字，不再自带一份调色板。 */
+  --oc-error: #B36651;
+  --oc-warning: #C68D44;
+  --oc-success: #A5A098;
+
+  /* 危险按钮的实心底色 —— **灰调红**（比 --color-error 低饱和一档，压在纸上不刺眼、
+     压在暗底上也不糊）。只给「点下去数据就没了」的确认键：删除 / 永久删除 / 放弃未保存改动。
+     底色在亮暗两套里都用这一枚（同 --color-error），所以上面的字用固定纸白，不随主题翻转。 */
+  --oc-danger: #9C5F4D;
+  --oc-danger-hover: #8A5344;
+  --oc-danger-ink: #FBF7F1;
+
+  /* 强调色板（12 档）—— **只给图表用**：关系图连线 / 时间线 / 统计图。
+   * 归属 `page`（主题可覆盖）；界面控件不开放（见 docs/主题.md §4）。
+   * 每档在纸上亮暗两套都验过对比度：文字与线条同色，最浅一档仍 ≥ 4.5:1。
+   * 组件里不许写裸色值，一律 `var(--oc-accent-N)`，取色走 src/lib/relation-colors.ts。 */
+  --oc-accent-1: #AC604B; /* 赤陶 */
+  --oc-accent-2: #996A2F; /* 琥珀 */
+  --oc-accent-3: #6A7A4C; /* 苔绿 */
+  --oc-accent-4: #557D69; /* 松绿 */
+  --oc-accent-5: #557992; /* 靛蓝 */
+  --oc-accent-6: #7170A1; /* 紫罗兰 */
+  --oc-accent-7: #996679; /* 玫瑰 */
+  --oc-accent-8: #956B53; /* 赭石 */
+  --oc-accent-9: #5F7878; /* 青灰 */
+  --oc-accent-10: #7D6C9E; /* 雾紫 */
+  --oc-accent-11: #906F45; /* 麦金 */
+  --oc-accent-12: #75756D; /* 石墨 */
+
+  /* 浮层阴影（**唯一一档**）：只给浮在内容之上的东西 —— 菜单 / 下拉 / 右键 / 弹窗 / 抽屉 / 通知。
+     小、淡、两层：近处一圈收边 + 远处一圈柔光。内容面（卡片 / 按钮 / 输入）仍然是零阴影。 */
+  --oc-shadow-float: 0 1px 2px rgba(43, 43, 43, 0.05), 0 6px 16px -6px rgba(43, 43, 43, 0.12);
+}
+
+/* 动效工具类接进 Tailwind 的 theme 命名空间：
+   `--transition-duration-*` → duration-fast / duration-base / duration-slow，
+   `--ease-*` → ease-quiet。令牌值仍在 :root，这里只做名字映射。 */
+@theme inline {
+  --transition-duration-fast: var(--oc-duration-fast);
+  --transition-duration-base: var(--oc-duration-base);
+  --transition-duration-slow: var(--oc-duration-slow);
+  --ease-quiet: var(--oc-ease-quiet);
+}
+
+/* 字号五档（Tailwind v4 会生成 text-micro / text-caption / text-ui / text-body / text-reading）。
+   以前字面量有 `text-[10px]`…`text-[15px]` 八九档，加上 `text-xs/sm/base` 实际在用的字号更多。
+   五档按**角色**取，不按大小随手写：
+
+     micro     11px  角标 / 分组标题 / 表头的极小字
+     caption   12px  说明 / 状态 / 次要信息
+     ui        13px  界面默认（按钮、菜单项、字段、列表副标题）
+     body      14px  正文段落 / 表单主文
+     reading   15px  长文阅读（编辑器正文）
+
+   `text-[11px]` 这类字面量已经清完（2026-11-15 阶段 C，脚本 `scripts/migrate-font-sizes.ts`）：
+   业务文件里只剩白名单里的几个像素值（10 / 12.5 / 17 / 18 / 24 / 26 / 28，各有理由），
+   `scripts/design-audit.ts` 的 `font-size-literal` 已是**报错**规则。
+   要新加一档，除了在下面加 `--text-*`，还要同步 `src/lib/utils.ts` 的
+   `extendTailwindMerge`（否则 `cn()` 会把它当成颜色类合并掉、字号掉回 16px）。 */
+@theme {
+  --text-micro: 11px;
+  --text-caption: 12px;
+  --text-ui: 13px;
+  --text-body: 14px;
+  --text-reading: 15px;
+}
+
+.dark {
+  --oc-paper: #1C1B1A;
+  --oc-paper-alt: #242321;
+  --oc-paper-card: #2D2B28;
+  --oc-line: #38352F;
+  --oc-line-hover: #4A4642;
+  --oc-line-soft: color-mix(in oklab, var(--oc-line) 55%, transparent);
+  --oc-ink: #E3DFD8;
+  --oc-ink-muted: #A5A098;
+  --oc-ink-faint: #6E6A63;
+  --oc-hover: rgba(227, 223, 216, 0.06);
+  --oc-selection: rgba(227, 223, 216, 0.3);
+  --oc-scrim: rgba(0, 0, 0, 0.40);
+  --oc-error-light: rgba(179, 102, 81, 0.18);
+  --oc-error: #B36651;
+  --oc-warning: #C68D44;
+  --oc-success: #A5A098;
+  /* 强调色板在暗色下整体提亮，保证同样的 4.5:1（色相不变） */
+  --oc-accent-1: #B8715D; /* 赤陶 */
+  --oc-accent-2: #C68D44; /* 琥珀 */
+  --oc-accent-3: #8FA36B; /* 苔绿 */
+  --oc-accent-4: #5F8D75; /* 松绿 */
+  --oc-accent-5: #6A8FA8; /* 靛蓝 */
+  --oc-accent-6: #8180AB; /* 紫罗兰 */
+  --oc-accent-7: #A47788; /* 玫瑰 */
+  --oc-accent-8: #A77B62; /* 赭石 */
+  --oc-accent-9: #6E8B8B; /* 青灰 */
+  --oc-accent-10: #8B7BA8; /* 雾紫 */
+  --oc-accent-11: #B08A5A; /* 麦金 */
+  --oc-accent-12: #83837B; /* 石墨 */
+  /* 暗色下浮层的「浮起」全靠阴影：底色更深，收边用更实的黑 */
+  --oc-shadow-float: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 20px -8px rgba(0, 0, 0, 0.55);
+}
+
+@theme inline {
+  --color-paper: var(--oc-paper);
+  --color-paper-alt: var(--oc-paper-alt);
+  --color-paper-card: var(--oc-paper-card);
+  --color-line: var(--oc-line);
+  --color-line-soft: var(--oc-line-soft);
+  --color-line-hover: var(--oc-line-hover);
+  --color-ink: var(--oc-ink);
+  --color-ink-muted: var(--oc-ink-muted);
+  --color-ink-faint: var(--oc-ink-faint);
+  --color-ink-fixed: var(--oc-ink-fixed);
+  --color-paper-fixed: var(--oc-paper-fixed);
+  --color-error: #B36651;
+  --color-warning: #C68D44;
+  --color-success: #A5A098;
+  --color-error-light: var(--oc-error-light);
+  --color-danger: var(--oc-danger);
+  --color-danger-hover: var(--oc-danger-hover);
+  --color-danger-ink: var(--oc-danger-ink);
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', Roboto, 'Helvetica Neue', Arial, 'Noto Sans SC', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+  --font-serif: 'OC Serif', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'Times New Roman', serif;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  /* ── 圆角：只有三档（唯一源，改这里等于全局改圆角）──────────────────
+     界面语言是「极小圆角」，所以三档全在 4–8px，没有 12px 以上的"卡片大圆角"。
+
+       小 rounded-item      4px   —— 贴内容的小件：chip / 菜单行 / 复选 / 缩略图 / 图片 / 卡片
+       中 rounded-control   6px   —— 一个能点的控件：按钮 / 图标按钮 / 菜单容器 / 浮层
+       大 rounded-panel     8px   —— 一块浮起来的容器：弹窗 / 面板 / 底部抽屉
+
+     另外只有两种非档位形态：rounded-full（圆形：头像 / 徽章 / 色点 / 开关滑杆 / 浮在图上的圆钮）
+     与 rounded-none（贴边整条 / 线段）。**不再有** media / menu 两个名字（已并入 item / control），
+     也没有 shadcn 那套 --radius-sm/md/lg 梯子（`rounded-sm|md|lg` 一律禁用，audit 会拦）。
+     元素 → 档位的完整对照表：.opencode/skills/oc-studio-design/SKILL.md「圆角」一节。 */
+  --radius-item: 4px;
+  --radius-control: 6px;
+  --radius-panel: 8px;
+}
+
+@layer base {
+  :root {
+    --background: #FEFCF8;
+    --foreground: #2B2B2B;
+    --card: #F3EFE9;
+    --card-foreground: #2B2B2B;
+    --popover: #FEFCF8;
+    --popover-foreground: #2B2B2B;
+    --primary: #2B2B2B;
+    --primary-foreground: #FEFCF8;
+    --secondary: #FAF7F2;
+    --secondary-foreground: #2B2B2B;
+    --muted: #F3EFE9;
+    --muted-foreground: #6E6A63;
+    --accent: #F3EFE9;
+    --accent-foreground: #2B2B2B;
+    --destructive: #B36651;
+    --destructive-foreground: #FEFCF8;
+    --border: #E7E3DC;
+    --input: #E7E3DC;
+    --ring: #D6D0C4;
+    --shadow: none;
+    --sidebar: #FAF7F2;
+    --sidebar-foreground: #2B2B2B;
+    --sidebar-primary: #2B2B2B;
+    --sidebar-primary-foreground: #FEFCF8;
+    --sidebar-accent: #FAF7F2;
+    --sidebar-accent-foreground: #2B2B2B;
+    --sidebar-border: #E7E3DC;
+    --sidebar-ring: #D6D0C4;
+    --chart-1: #E7E3DC;
+    --chart-2: #D6D0C4;
+    --chart-3: #A5A098;
+    --chart-4: #6E6A63;
+    --chart-5: #2B2B2B;
+  }
+
+  .dark,
+  [data-theme="dark"] {
+    --background: #1C1B1A;
+    --foreground: #E3DFD8;
+    --card: #2D2B28;
+    --card-foreground: #E3DFD8;
+    --popover: #242321;
+    --popover-foreground: #E3DFD8;
+    --primary: #E3DFD8;
+    --primary-foreground: #1C1B1A;
+    --secondary: #2D2B28;
+    --secondary-foreground: #E3DFD8;
+    --muted: #2D2B28;
+    --muted-foreground: #A5A098;
+    --accent: #2D2B28;
+    --accent-foreground: #E3DFD8;
+    --destructive: #B36651;
+    --destructive-foreground: #E3DFD8;
+    --border: #38352F;
+    --input: #38352F;
+    --ring: #38352F;
+    --shadow: none;
+    --sidebar: #242321;
+    --sidebar-foreground: #E3DFD8;
+    --sidebar-primary: #E3DFD8;
+    --sidebar-primary-foreground: #1C1B1A;
+    --sidebar-accent: #242321;
+    --sidebar-accent-foreground: #E3DFD8;
+    --sidebar-border: #38352F;
+    --sidebar-ring: #4A4642;
+    --chart-1: #2D2B28;
+    --chart-2: #4A4642;
+    --chart-3: #A5A098;
+    --chart-4: #D6D0C4;
+    --chart-5: #E3DFD8;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+  /* 按钮默认带 `--radius-control`（6px）。全局 `button:hover` 会给**任何**按钮铺一块底色，
+     漏写 rounded-* 的那一个就会是个方块 —— 这里兜住，免得靠人记得写。
+     显式写了圆角类的以显式值为准（utilities 层在 base 之后）。 */
+  button {
+    border-radius: var(--radius-control);
+    transition: background-color var(--oc-duration-fast) var(--oc-ease-quiet), color var(--oc-duration-fast) var(--oc-ease-quiet),
+      border-color var(--oc-duration-fast) var(--oc-ease-quiet);
+  }
+  button:hover {
+    background-color: var(--oc-hover);
+  }
+  /* 光标：桌面应用的按钮 / 菜单项 / 行都是箭头，手形只留给超链接。
+     网页的 `cursor: pointer` 泛用是最明显的「这是网站」信号之一。 */
+  button,
+  [role='button'],
+  [role='menuitem'],
+  [role='tab'],
+  [role='option'],
+  summary,
+  label {
+    cursor: default;
+  }
+  /* 键盘焦点圈 —— 全局唯一一档。
+     `focus:outline-none` 在业务代码里出现过 46 处、统一的 `focus-visible` 又基本没有，
+     于是键盘用户 Tab 时经常不知道焦点在哪。这里给一个统一圈，**输入框除外**：
+     输入框靠那条底线表达焦点，再套一圈就重了。 */
+  :focus-visible {
+    outline: 1.5px solid var(--oc-ink-muted);
+    outline-offset: 1px;
+  }
+  input:focus-visible,
+  textarea:focus-visible,
+  [contenteditable]:focus-visible,
+  .ProseMirror:focus-visible {
+    outline: none;
+  }
+  /* 图片不可拖出：WebView 里拖一张头像会出现半透明拖拽影像，甚至能拖到桌面。 */
+  img {
+    -webkit-user-drag: none;
+    user-drag: none;
+  }
+}
+
+/* 全局极小圆角 —— 界面语言：除圆形（头像/徽章/色点/开关）外，只有 4 / 6 / 8 三档。
+   三档定义在 @theme（`--radius-item/control/panel` → `rounded-item` 等工具类），
+   取类名请走 `lib/ui-tokens.ts` 的 `ROUND_*`；不要就地写 `rounded-[6px]`，
+   也不要用 `rounded-sm|md|lg`（Tailwind/shadcn 固定值，会和三档打架）。
+   每个元素归哪一档，见 .opencode/skills/oc-studio-design/SKILL.md「圆角」一节的对照表。 */
+
+/* Degradation: opaque background by default (browser dev / Linux) */
+body {
+  background: var(--color-paper) !important;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  touch-action: pan-x pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;
+}
+
+/* Allow text selection inside editors and inputs */
+.ProseMirror,
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Prevent page zoom on double-tap / pinch */
+html {
+  touch-action: pan-x pan-y;
+  -ms-touch-action: manipulation;
+}
+
+/* Mica active: transparent body */
+html.tauri-mica body {
+  background: transparent !important;
+}
+
+.transparent-text {
+  text-shadow: none;
+}
+
+html.tauri-mica .transparent-text {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+html.tauri-mica.dark .transparent-text {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Degradation: layout shells restore standard bg */
+html:not(.tauri-mica) [data-app-shell],
+html:not(.tauri-mica) [data-sidebar],
+html:not(.tauri-mica) [data-menubar],
+html:not(.tauri-mica) [data-statusbar] {
+  background: var(--color-paper-alt);
+}
+
+/* Mica active: layout shells transparent —— 外壳和 chrome 都不能铺底色，否则毛玻璃被盖死 */
+html.tauri-mica [data-app-shell],
+html.tauri-mica [data-sidebar],
+html.tauri-mica [data-menubar],
+html.tauri-mica [data-statusbar] {
+  background: transparent;
+}
+
+/* 应用级背景图（docs/主题.md §2）：图铺在 html 上，外壳让位；
+   内容区仍是 bg-paper 的纸，背景不会穿过正文。遮罩由 JS 按纸色算成 --oc-bg-wash。 */
+html.oc-background {
+  background-color: var(--oc-paper);
+  background-image: linear-gradient(var(--oc-bg-wash), var(--oc-bg-wash)), var(--oc-bg-image);
+  background-size: var(--oc-bg-size);
+  background-position: center;
+  background-repeat: var(--oc-bg-repeat);
+  background-attachment: var(--oc-bg-attachment);
+}
+
+html.oc-background body {
+  background: transparent !important;
+}
+
+html.oc-background [data-app-shell],
+html.oc-background [data-sidebar],
+html.oc-background [data-menubar],
+html.oc-background [data-statusbar] {
+  background: var(--oc-bg-shell);
+}
+
+/* 地图整屏时状态栏不属于画布，藏掉；否则 fixed 画布只盖到内容区底 */
+body[data-map-immersive='true'] [data-statusbar],
+body[data-map-immersive='true'] [data-dev-mock] {
+  display: none;
+}
+
+/* macOS 窗口外壳：装饰交给系统（titleBarStyle: Overlay），原生红绿灯浮在顶栏左上。
+   两件事必须由 CSS 做，不能等 React 起来按 isMacOS() 改 className —— 那会和
+   服务端渲染的 HTML 对不上，首帧先按 Windows 排版再跳一下。
+   - 顶栏左侧给红绿灯留位：14px 起点 + 三颗 12px 圆钮的整段 ≈ 78px
+   - 自绘的最小化/最大化/关闭在 macOS 上多余（系统已经有），藏掉
+   判定来源是 `<html data-os>`，由 `PLATFORM_BOOT_SCRIPT` 在 hydration 前落值。 */
+/* 标题栏高度：macOS 的 Overlay 标题栏把内容顶到 y=0，红绿灯浮在上面。
+   全屏界面（导出中心 / 模板编排 / 裁剪 / 看图）用它把自己往下推 32px；
+   其余平台为 0，布局完全不变。 */
+:root {
+  --oc-titlebar-h: 0px;
+}
+
+[data-os='mac'] {
+  --oc-titlebar-h: 32px;
+}
+
+[data-os='mac'] [data-menubar] {
+  /* 红绿灯从 x=14 起、三颗按钮到 x≈73.5 结束（见 tauri.macos.conf.json 的
+     trafficLightPosition），这里再留 ~18px 呼吸位，标题才不会贴住绿灯。
+     改红绿灯位置时这里的数要一起改。 */
+  padding-left: 92px;
+}
+
+[data-os='mac'] [data-window-controls] {
+  display: none;
+}
+
+/* macOS 的菜单在屏幕顶部，不在窗口里：窗口内那排「文件 / 编辑 / 视图 / 关于」隐藏，
+   动作由 `NativeMacMenu` 注册到系统菜单栏（同一批 handler）。
+   只藏这一组，品牌名 / 搜索 / 灵感便签 / 拖拽区都留着。 */
+[data-os='mac'] [data-inapp-menus] {
+  display: none;
+}
+
+.main-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+/* 画廊（Cover Flow）：横向翻页区域不显示滚动条 —— 翻页靠滚轮 / 拖动 /
+   触控板，画一条横杠只会在卡片下方多一道灰线。 */
+.coverflow-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.coverflow-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.main-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.main-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.main-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--oc-ink-faint);
+}
+
+.aside-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.aside-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.aside-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+
+/* ProseMirror editor styles */
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: var(--color-ink-faint);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.tiptap {
+  outline: none;
+}
+
+/* 首块不带外边距：正文上方已经有一条 48px 的顶栏占位，再叠标题的 1.25em 会空出一大截 */
+.tiptap > :first-child {
+  margin-top: 0;
+}
+
+.tiptap a {
+  color: var(--color-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--color-line-hover);
+  text-underline-offset: 2px;
+}
+
+.tiptap a:hover {
+  text-decoration-color: var(--color-ink-muted);
+}
+
+/* 任务列表：复选框与正文首行同排、同高
+   - 用 `.tiptap` 而不是 `.ProseMirror`：TipTap 一定会在编辑器根节点上补这个类，
+     任务列表样式就不会因为根节点类名变化（或自定义 class 覆盖）而整段失效
+   - **TipTap v3 的 TaskItem 是 NodeView**，真实 DOM 是
+       <ul data-type="taskList"><li data-checked><label contenteditable="false"><input><span></label><div>…</div></li>
+     `<li>` 上**没有** `data-type="taskItem"`（v2 才有）。只认旧选择器的话这一整段全是死规则：
+     li 留着列表圆点、label 成内联、div 块级换行 → 复选框和正文分两行，
+     复选框还会露出 WebView 的蓝色默认样式（这正是「一直不在同一行」的由来）。
+     所以两类选择器并排：`[data-type="taskList"] > li` 覆盖编辑器（NodeView），
+     `[data-type="taskItem"]` 覆盖静态站导出 / 只读渲染（走 renderHTML，属性是真的）。
+   - 复选框是 16px 方块，上下留白按首行行高补，所以文字换行后仍与首行对齐
+   - 文字列必须是块级 flex 子项：内联 div 里的 <p> 会把正文挤到复选框下一行
+   - 首尾段落去掉外边距：否则 <p> 的 0.5em 上边距把首行顶下去 */
+.tiptap [data-type="taskList"] {
+  list-style: none !important;
+  padding-left: 0 !important;
+}
+
+.tiptap [data-type="taskList"] > li,
+.tiptap [data-type="taskItem"] {
+  list-style: none !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.tiptap [data-type="taskList"] > li > label,
+.tiptap [data-type="taskItem"] > label {
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 16px !important;
+  margin-right: 0.5rem !important;
+  /* 首行行高 1.625 × 15px ≈ 24.4px，补 (行高 − 16px) / 2 */
+  margin-top: 4px;
+  margin-top: calc((1lh - 16px) / 2);
+  border: 1px solid var(--oc-line) !important;
+  border-radius: var(--radius-item) !important;
+  background-color: var(--oc-paper-card) !important;
+  cursor: default !important;
+  transition: background-color var(--oc-duration-fast) var(--oc-ease-quiet),
+    border-color var(--oc-duration-fast) var(--oc-ease-quiet);
+}
+
+.tiptap [data-type="taskList"] > li > label:hover,
+.tiptap [data-type="taskItem"] > label:hover {
+  border-color: var(--oc-line-hover) !important;
+}
+
+/* 选中：墨色实心 + 纸色勾 —— 与设置里的开关、Tab 下划线是同一枚「选中」色，
+   替掉 WebView 自带的蓝色复选框（那是唯一一处不在设计系统里的强调色）。 */
+.tiptap [data-type="taskList"] > li[data-checked="true"] > label,
+.tiptap [data-type="taskItem"][data-checked="true"] > label {
+  border-color: var(--oc-ink-muted) !important;
+  background-color: var(--oc-ink-muted) !important;
+}
+
+.tiptap [data-type="taskList"] > li[data-checked="true"] > label::after,
+.tiptap [data-type="taskItem"][data-checked="true"] > label::after {
+  content: '';
+  display: block;
+  width: 5px;
+  height: 9px;
+  border-right: 2px solid var(--oc-paper);
+  border-bottom: 2px solid var(--oc-paper);
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+/* 原生复选框铺满方框但不可见：命中区仍是真实 input（键盘可聚焦），
+   同时把 WebView 自带的蓝色方块彻底挡掉 */
+.tiptap [data-type="taskList"] > li > label input[type="checkbox"],
+.tiptap [data-type="taskItem"] > label input[type="checkbox"] {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  opacity: 0 !important;
+  cursor: default !important;
+}
+
+.tiptap [data-type="taskList"] > li > label:has(input:focus-visible),
+.tiptap [data-type="taskItem"] > label:has(input:focus-visible) {
+  border-color: var(--oc-ink-muted) !important;
+}
+
+.tiptap [data-type="taskList"] > li > div,
+.tiptap [data-type="taskItem"] > div {
+  display: block !important;
+  flex: 1 1 auto !important;
+  min-width: 0;
+}
+
+.tiptap [data-type="taskList"] > li > div > p:first-child,
+.tiptap [data-type="taskItem"] > div > p:first-child {
+  margin-top: 0 !important;
+}
+
+.tiptap [data-type="taskList"] > li > div > p:last-child,
+.tiptap [data-type="taskItem"] > div > p:last-child {
+  margin-bottom: 0 !important;
+}
+
+.tiptap h1 {
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1.4;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap h2 {
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1.4;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap h3 {
+  font-family: var(--font-serif);
+  font-size: 1.1rem;
+  font-weight: 500;
+  line-height: 1.4;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap ul,
+.tiptap ol {
+  padding-left: 1.5em;
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap li {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.tiptap ul > li {
+  list-style-type: disc;
+}
+
+.tiptap ol > li {
+  list-style-type: decimal;
+}
+
+.tiptap blockquote {
+  border-left: 2px solid var(--color-line-hover);
+  padding-left: 1em;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  color: var(--color-ink-muted);
+}
+
+.tiptap hr {
+  border: none;
+  border-top: 1px solid var(--color-line);
+  margin: 1.5em 0;
+}
+
+.tiptap code {
+  background: var(--color-paper-card);
+  border-radius: var(--radius-item);
+  padding: 0.15em 0.4em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.tiptap pre {
+  background: var(--color-paper-card);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-item);
+  padding: 0.75em 1em;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  overflow-x: auto;
+}
+
+.tiptap pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+/* Table column resize handles */
+.ProseMirror table .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: var(--color-line-hover);
+  cursor: col-resize;
+  opacity: 0;
+  transition: opacity var(--oc-duration-fast);
+}
+
+.ProseMirror table .column-resize-handle:hover,
+.ProseMirror table .column-resize-handle.is-dragging {
+  opacity: 1;
+}
+
+.ProseMirror table td,
+.ProseMirror table th {
+  position: relative;
+}
+
+/* Selection styles —— 颜色是令牌（`--oc-selection`），换主题预设时跟着变。
+   以前这里写死 rgba(107,102,93,.25) / rgba(227,223,216,.3)，主题一换就不对了。 */
+::selection {
+  background: var(--oc-selection);
+  color: inherit;
+}
+
+.ProseMirror *::selection {
+  background: var(--oc-selection) !important;
+  color: inherit !important;
+}
+
+/* AlertDialog — zoom animations should originate from center */
+[data-slot="alert-dialog-content"] {
+  transform-origin: center !important;
+}
+
+
+
+/* 自定义滚动条 —— **静止时透明**（Windows 11 / macOS 的默认行为是细条、静止看不见、
+   悬停才显形）。WebView2 不支持「自动隐藏」，用「容器 :hover 时才给滑块上色」近似：
+   静止透明 → 悬停在容器上 `line-hover` → 按住 / 悬停滑块本身 `ink-faint`。 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+
+/* 任意可滚动元素被悬停时（指针在内容上也成立 —— `:hover` 会传到祖先）才显形 */
+*:hover::-webkit-scrollbar-thumb {
+  background: var(--oc-line-hover);
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background: var(--oc-ink-faint);
+}
+
+/* 主滚动容器 / 侧栏独立滚动区：同一套规则（滑块静止透明，容器悬停才显形） */
+.main-scroll:hover::-webkit-scrollbar-thumb,
+.aside-scroll:hover::-webkit-scrollbar-thumb {
+  background: var(--oc-line-hover);
+}
+
+.main-scroll::-webkit-scrollbar-thumb:hover,
+.aside-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--oc-ink-faint);
+}
+
+/* Firefox 兜底 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--oc-line-hover) transparent;
+}
+
+/* Touch feedback */
+.touch-feedback {
+  transition: transform 120ms var(--oc-ease-quiet);
+}
+.touch-feedback:active {
+  transform: scale(0.96);
+}
+
+/* 浮层阴影 —— 唯一一档（值见 :root / .dark 的 --oc-shadow-float）。
+   只给浮在内容之上的东西用：菜单 / 下拉 / 右键 / 弹窗 / 抽屉 / 通知。
+   用法：loat-shadow（ui-tokens 里的 FLOAT_SHADOW）。内容面仍然零阴影。 */
+@utility float-shadow {
+  box-shadow: var(--oc-shadow-float);
+}
+/* 行分隔线（可 hover 的整行用）
+   行自己带 `border-b` 时，圆角会把线的两端向上带弯 —— 线跟着圆角走，看着像括号。
+   这里把线画成行内部的一条 1px 直线、两端各缩 8px：直线就是直线，圆角只管底色。
+   容器加 `.rules-end` 去掉最后一行的线（那条线什么都不分隔）。 */
+.row-rule {
+  position: relative;
+}
+.row-rule::after {
+  content: '';
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  bottom: 0;
+  height: 1px;
+  background: var(--oc-line);
+  pointer-events: none;
+}
+.rules-end > *:last-child::after {
+  content: none;
+}
+
+/* Section stacking — CSS Grid so all sections occupy the same cell.
+   Combined with display:none + allow-discrete, hidden sections don't
+   affect the grid. During transitions both sections overlap for crossfade. */
+.section-stack {
+  display: grid;
+  grid-template: 1fr / 1fr;
+  height: 100%;
+}
+.section-stack > * {
+  grid-area: 1 / 1;
+  min-height: 0;
+}
+
+/* Section fade transitions.
+   transition-behavior: allow-discrete lets us transition display:none —
+   display stays block during the opacity fade (150ms), then flips to none. */
+.section-fade {
+  transition: opacity var(--oc-duration-fast) var(--oc-ease-quiet), display var(--oc-duration-fast) var(--oc-ease-quiet);
+  transition-behavior: allow-discrete;
+  scrollbar-gutter: stable;
+  /* 弹性头图（StretchyHeader）折叠时逐帧改头图高度，正文会被带着上移。
+     滚动锚定会为了「钉住视口里的元素」反向调整 scrollTop，和折叠量打架（来回跳），
+     这里关掉：各 section 里的图片框都有固定比例，本来也不需要锚定。 */
+  overflow-anchor: none;
+}
+.section-fade-no-gutter {
+  scrollbar-gutter: auto;
+}
+.section-fade[data-visible="false"] {
+  display: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Starting state for entrance transitions — when an element goes from
+   display:none → display:block, this provides the initial opacity:0
+   so the browser can transition to opacity:1. */
+@starting-style {
+  .section-fade:not([data-visible="false"]) {
+    opacity: 0;
+  }
+}
+
+/* M114 fallback: transition-behavior not supported — use visibility instead of display */
+@supports not (transition-behavior: allow-discrete) {
+  .section-fade {
+    transition: opacity var(--oc-duration-fast) var(--oc-ease-quiet);
+  }
+  .section-fade[data-visible="false"] {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    display: block;
+  }
+  .section-fade[data-visible="true"] {
+    visibility: visible;
+    opacity: 1;
+  }
+}
+
+/* M114 fallback: @starting-style not supported — set initial opacity for hidden elements */
+@supports not (at-rule: starting-style) {
+  .section-fade:not([data-visible]) {
+    opacity: 0;
+  }
+}
+
+/* 旧内核 backdrop-blur 降级：半透明 → 不透明。
+   底色必须走令牌（换主题预设 / 暗色时 #FEFCF8 那块会是一块错色）。 */
+[data-below-target-version] .backdrop-blur-lg {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background-color: var(--oc-paper);
+}
+
+/* HarmonyOS safe-area fallback: 当 ArkWeb env() 返回 0 时使用 JS 注入的估算值 */
+[data-safe-area-fallback="true"] {
+  --safe-top: var(--safe-top-estimated, 24px);
+  --safe-bottom: var(--safe-bottom-estimated, 16px);
+}
+
+/* Slide-in/out keyframes for editor transitions */
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slide-out-right {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(16px); }
+}
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slide-out-left {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(-16px); }
+}
+
+.section-fade[data-animate="slide-in-right"] {
+  animation: slide-in-right var(--oc-duration-fast) var(--oc-ease-quiet);
+}
+.section-fade[data-animate="slide-out-right"] {
+  animation: slide-out-right var(--oc-duration-fast) var(--oc-ease-quiet) forwards;
+}
+.section-fade[data-animate="slide-in-left"] {
+  animation: slide-in-left var(--oc-duration-fast) var(--oc-ease-quiet);
+}
+.section-fade[data-animate="slide-out-left"] {
+  animation: slide-out-left var(--oc-duration-fast) var(--oc-ease-quiet) forwards;
+}
+
+/* 桌面与移动端都用同一套横滑：列表 ↔ 编辑器的进出靠方向感，纯淡入分不清是进还是退。 */
+
+/* Context menu fade transition */
+.context-menu-fade {
+  opacity: 0;
+  transition: opacity var(--oc-duration-fast) var(--oc-ease-quiet);
+}
+.context-menu-fade.context-menu-visible {
+  opacity: 1;
+}
+
+/* 模态浮层进场。
+   刻意只用进场动画、不做退出：面板关闭即卸载，省掉一套 mounted/visible 状态机
+   （那套状态机必须在 effect 里同步 setState 才能启动过渡，会触发 cascading render）。 */
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes overlay-panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.overlay-backdrop {
+  animation: overlay-in var(--oc-duration-fast) var(--oc-ease-quiet);
+}
+.overlay-panel {
+  animation: overlay-panel-in var(--oc-duration-fast) var(--oc-ease-quiet);
+}
+
+/* 导出中心：窄屏上下分区。预览固定高度，配置区吃剩余并自己滚动。
+   不用 `max-md:h-[..]` —— 那一档在列向 flex 里会被 `flex-basis: 0` 吃掉。
+
+   **预览必须自己滚，不能溢出**：备份面板的预览卡（.ocbak 清单）比 46vh 高，
+   以前这里没有 overflow，卡片就从预览区里溢出来 —— 往上盖住顶栏的「返回 / 导出中心」
+   和页签行，往下盖住配置区；卡片还不是定位元素，只在 DOM 后面，画在顶栏之上，
+   于是「返回」点不到、看着像一张关不掉的浮层。 */
+@media (max-width: 767px) {
+  .export-panel { flex-direction: column; }
+  .export-preview {
+    flex: none;
+    height: 46vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    /* `safe center`：放得下就居中，放不下就贴顶（普通 center 会把上半截推到滚不到的地方） */
+    justify-content: safe center;
+  }
+  /* 居中的 flex 容器溢出时会把上半截裁到滚不到的地方；auto margin 在有余量时居中、
+     溢出时归零，卡片就从顶部开始、可以完整滚动 */
+  .export-preview > * { margin-block: auto; }
+  .export-config {
+    width: 100%;
+    min-height: 0;
+    flex: 1 1 0%;
+    overflow: hidden;
+    border-left: 0;
+    border-top: 1px solid var(--oc-line);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section-fade,
+  .section-fade[data-visible="false"] {
+    transition: none;
+  }
+  .section-fade[data-animate] {
+    animation: none;
+  }
+  /* 全局兜底：关闭所有过渡与动画（含 touch-feedback 缩放） */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+
+
+/* css-rebuild-probe */
+
+
+/* ── 文档预览正文 ─────────────────────────────────────────────
+   只作用于 `PagePreview` 里那段 `entry.html`（导出中心「文档」页签 + 小说导出共用）。
+   注意：这段和 `.export-panel / .export-preview / .export-config` 都是导出器的样式，
+   重写 globals.css 时别一起丢了（滑杆曾经就因为同类重写退回原生控件）。 */
+.oc-doc-prose {
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: var(--oc-ink);
+}
+.oc-doc-prose > * + * {
+  margin-top: 0.85em;
+}
+.oc-doc-prose p:empty {
+  display: none;
+}
+.oc-doc-prose h1,
+.oc-doc-prose h2,
+.oc-doc-prose h3,
+.oc-doc-prose h4 {
+  margin-top: 1.1em;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.oc-doc-prose strong {
+  font-weight: 600;
+}
+.oc-doc-prose em {
+  font-style: italic;
+}
+.oc-doc-prose ul,
+.oc-doc-prose ol {
+  padding-left: 1.4em;
+}
+.oc-doc-prose ul {
+  list-style: disc;
+}
+.oc-doc-prose ol {
+  list-style: decimal;
+}
+.oc-doc-prose li + li {
+  margin-top: 0.25em;
+}
+.oc-doc-prose blockquote {
+  padding-left: 0.85em;
+  border-left: 2px solid var(--oc-line);
+  color: var(--oc-ink-muted);
+}
+.oc-doc-prose hr {
+  border: 0;
+  border-top: 1px solid var(--oc-line);
+}
+.oc-doc-prose a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.oc-doc-prose code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.95em;
+}
+.oc-doc-prose pre {
+  overflow-x: auto;
+  padding: 0.7em 0.85em;
+  border: 1px solid var(--oc-line);
+  border-radius: var(--radius-item);
+  background: var(--oc-paper-alt);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.oc-doc-prose pre code {
+  font-size: inherit;
+}
+.oc-doc-prose img {
+  max-width: 100%;
+  border-radius: var(--radius-item);
+}
+.oc-doc-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.oc-doc-prose th,
+.oc-doc-prose td {
+  padding: 0.35em 0.5em;
+  border: 1px solid var(--oc-line);
+  text-align: left;
+  vertical-align: top;
+}
+.oc-doc-prose th {
+  font-weight: 600;
+}
+
+/* ── 关系图：节点名 ─────────────────────────────────────────────
+   名字要压在别人的卡片和线上也能读：给两层纸色光晕（与地图标注层的「纸色外壳」同一手法）。
+   缩到 `LABEL_ZOOM`（0.7）以下整批淡出 —— 40 个节点的名字挤在 0.6 倍下只会糊成一片，
+   那时候留图形比留字有用。阈值在 `relation-graph-utils.ts`，这里只管表现。 */
+.graph-node-label {
+  text-shadow:
+    0 0 2px var(--oc-paper),
+    0 0 6px var(--oc-paper);
+  transition: opacity 120ms var(--oc-ease-quiet);
+}
+[data-graph-labels='off'] .graph-node-label {
+  opacity: 0;
+}
+
+/* 拖动中的名字浮尘（缩放很小时节点名看不见，跟着鼠标反而看得清） */
+.graph-drag-ghost {
+  animation: overlay-in var(--oc-duration-fast) var(--oc-ease-quiet);
+}
+
+/* ── 窗口失焦 ────────────────────────────────────────────────────
+   原生窗口失去焦点时标题栏文字变灰、选中高亮变淡：用户靠这个知道「现在键盘输入去哪了」。
+   状态由 `WindowFocusSync.tsx` 写到 <html data-window-inactive>（Tauri 走 onFocusChanged，
+   浏览器走 window 的 focus / blur）。 */
+[data-window-inactive='true'] [data-menubar],
+[data-window-inactive='true'] [data-sidebar],
+[data-window-inactive='true'] [data-statusbar] {
+  color: var(--oc-ink-faint);
+}
+
+[data-window-inactive='true'] [data-sidebar] .text-ink {
+  color: var(--oc-ink-muted);
+}
+
+/* 侧栏选中项的 2px 竖线跟着降一档（`ITEM_ON` 的 before:bg-ink） */
+[data-window-inactive='true'] [data-sidebar] [class*='before:bg-ink']::before {
+  background: var(--oc-ink-faint);
+}
+
+/* 窗口按钮的图标同样降一档（它们本来就比正文淡一级） */
+[data-window-inactive='true'] [data-window-controls] button {
+  color: var(--oc-ink-faint);
+}
+
+/* ── Mica 下的悬停可见性 ──────────────────────────────────────────
+   `--oc-hover` 是 4.5% 墨；铺在 Mica 透出来的桌面壁纸上几乎看不见（亮色壁纸下尤其）。
+   只在外壳两块上加深一档 —— 内容区的纸是不透明的，那里不需要动。 */
+html.tauri-mica [data-sidebar],
+html.tauri-mica [data-menubar] {
+  --oc-hover: rgba(43, 43, 43, 0.08);
+}
+
+html.tauri-mica.dark [data-sidebar],
+html.tauri-mica.dark [data-menubar] {
+  --oc-hover: rgba(227, 223, 216, 0.1);
+}
+
+
+/* ── 手机左侧抽屉（MobileDrawer）────────────────────────────────────────
+   覆盖模式：抽屉压在内容上（组件里自己画遮罩）。
+   推移模式：整块应用外壳右移，抽屉从左边顶出来。外壳不在抽屉组件子树里，
+   只能靠 <html> 上的属性驱动；宽度与 `MobileDrawer.tsx` 的 drawerWidth() 保持一致。 */
+@media (max-width: 767px) {
+  html[data-drawer-push='true'] [data-app-shell] {
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  html[data-drawer-push='true'][data-drawer-open='true'] [data-app-shell] {
+    transform: translateX(min(84vw, 300px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-drawer-push='true'] [data-app-shell] {
+    transition: none;
+  }
+}
+
+/* 原生壳（Capacitor）横屏时的桌面外壳：窗口三键在 Android 上没有意义，藏掉 */
+html[data-mobile-shell='true'] [data-window-controls] {
+  display: none !important;
+}

@@ -1,0 +1,354 @@
+/**
+ * 界面原子类 —— 全局唯一的样式片段定义。
+ *
+ * 「一定要统一」：列表页 / 编辑器 / 浮层的同类控件都从这里取类名，
+ * 不再在各自文件里就地拼写，避免出现 48px 与 40px、描边与描边宽度不一致这类漂移。
+ *
+ * 铁律（OC Studio 界面语言）
+ * - 极小圆角：只有三档 4 / 6 / 8（圆形头像/徽章/色点除外）。语义名见下方 `ROUND_*`，值在 globals.css 的 @theme
+ * - 控件零描边：输入框只有一条底线；线只用于区块之间 / 表格行 / 浮层边界 / 空态占位框
+ * - 三级灰：ink / ink-muted / ink-faint
+ * - 浮层菜单横向满宽：容器只留上下内边距，行自己带 px —— hover 左右不留缝（macOS 观感）
+ */
+
+/* ── 圆角（三档） ─────────────────────────────────────
+   唯一源是 globals.css 的 @theme。只有三档，按「元素在界面里的角色」选，不按喜好：
+     小 ROUND_ITEM     4px  贴内容的小件：chip / 菜单行 / 复选 / 缩略图 / 图片 / 卡片
+     中 ROUND_CONTROL  6px  一个能点的控件：按钮 / 图标按钮 / 菜单与浮层容器
+     大 ROUND_PANEL    8px  一块浮起来的容器：弹窗 / 面板 / 底部抽屉
+   圆形（头像/徽章/色点/开关/浮在图上的圆钮）直接写 `rounded-full`；贴边整条写 `rounded-none`。
+   业务文件不要就地写 `rounded-[6px]`，也不要用 `rounded-sm|md|lg`。 */
+export const ROUND_ITEM = 'rounded-item'
+export const ROUND_CONTROL = 'rounded-control'
+export const ROUND_PANEL = 'rounded-panel'
+
+/* ── 字段行 ─────────────────────────────────────────────
+   标签在左（固定 64px），内容在右，行间 1px 线（线画在行下方）。
+   行容器加 `LIST_END` / `FIELD_GRID`，去掉**最后一行**的尾线 —— 那条线什么都不分隔，
+   只会让每个区块看起来被一个方框围住。表格行（概览 / 回收站）同理。 */
+export const FIELD_ROW = 'flex items-center gap-3 border-b border-line py-1.5'
+export const FIELD_ROW_TOP = 'flex items-start gap-3 border-b border-line py-1.5'
+/** 行容器：竖排（含全宽网格）—— 最后一行不要尾线 */
+export const LIST_END = '[&>*:last-child]:border-b-0'
+/** 字段行容器：两列网格 —— 最后**两格**都不要尾线（窄屏回落到 `LIST_END` 的效果） */
+export const FIELD_GRID = '[&>*:last-child]:border-b-0 sm:[&>*:nth-last-child(-n+2)]:border-b-0'
+export const FIELD_LABEL = 'w-16 shrink-0 text-body leading-5 text-ink-muted'
+/** 竖排表单里的标签（弹窗/设置） */
+export const FIELD_LABEL_BLOCK = 'mb-1.5 block text-ui text-ink-muted'
+
+/* ── 设置弹窗的行 ───────────────────────────────────────
+   只有两种，按控件的形状取，绝不混用：
+   - **开关 / 单行输入** → `SETTINGS_TOGGLE_ROW`：标签靠左、控件靠右，一行放下。
+   - **单选组 / 色板 / 图片** → `SETTINGS_FIELD`：**标签在上、控件在下**。这些控件
+     要的是横向宽度：挤进「108px 标签 + 其余」那一列，三个选项会被压成两行
+     （「白天 / 模式」），等分网格也排不开。
+   分组之间靠 `SETTINGS_GROUP` 的 1px 线 + 20px 间距，而不是只靠空隙。 */
+export const SETTINGS_TOGGLE_ROW = 'flex items-center justify-between gap-4'
+export const SETTINGS_FIELD = 'flex min-w-0 flex-col gap-2'
+export const SETTINGS_LABEL = 'text-ui leading-5 text-ink'
+/**
+ * 一组「标签在上」的字段（单选组 / 色板）：**字段之间 24px**，比开关行的 12px 松。
+ * 12px 时下一组的标签只比它自己的控件远一点点 —— 两条设置读起来像同一条的续行。
+ */
+export const SETTINGS_FIELD_GROUP_FIRST = 'flex flex-col gap-6'
+export const SETTINGS_FIELD_GROUP = 'mt-5 flex flex-col gap-6 border-t border-line pt-5'
+/** 分组：除第一组外都带上边线（`SETTINGS_GROUP`）—— 一行一个类，别就地写 */
+export const SETTINGS_GROUP = 'mt-5 flex flex-col gap-3 border-t border-line pt-5'
+/** 组内更细的分隔（如「背景」下的铺法 / 遮罩），不占整行 */
+export const SETTINGS_HINT = 'text-micro leading-4 text-ink-faint'
+/** 列表里「这一栏还是空的」那一行：和列表行同高基线，别用小一号的灰字凑数 */
+export const SETTINGS_EMPTY = 'py-2 text-ui leading-5 text-ink-faint'
+
+/* ── 区块标题 ───────────────────────────────────────────
+   衬线 15px：靠字族而非字号与 14px 的字段标签拉开层级。 */
+export const SECTION_TITLE = 'mb-3 font-serif text-reading font-bold tracking-[-0.01em] text-ink'
+/** 同行右侧还要放控件时用（自己控制 spacing） */
+export const SECTION_TITLE_BARE = 'font-serif text-reading font-bold tracking-[-0.01em] text-ink'
+
+/* ── 顶栏 / 页头 ───────────────────────────────────────
+   页头统一 48px；页面标题统一 18px 衬线加粗（列表页 / 编辑器 / 浮层共用）。 */
+export const PAGE_TITLE =
+  'shrink-0 whitespace-nowrap text-lg text-ink font-serif font-bold tracking-[-0.01em]'
+
+/**
+ * 列表页 / 时间线 / 相册的页头骨架（桌面 48px）。
+ *
+ * 粘顶与底色 / 模糊在 `ListShell` 的页头表面上，这里只排这一行的内容。
+ */
+export const TOOLBAR =
+  'max-md:hidden flex h-12 items-center justify-between gap-4 overflow-x-auto px-6 [&>*]:shrink-0 [&_button]:whitespace-nowrap [&_span]:whitespace-nowrap'
+/**
+ * 页头「浮起来」的那一档：1px 线与模糊（滚动后才加）。**只给页头表面**（`ListShell`），
+ * 页头里的行不要再叠一层 —— 多行页头各糊各的，落后的那一行就会露出「没糊」的缝。
+ */
+export const TOOLBAR_SHADE = 'border-b border-line bg-paper/85 backdrop-blur-lg'
+/** 页头静止态：线占住位置但不画出来（底色透明） */
+export const TOOLBAR_PLAIN = 'border-b border-transparent'
+
+/** 编辑器页头：桌面粘顶 48px，移动端固定在安全区之下 */
+export const EDITOR_HEADER =
+  'flex items-center justify-between max-md:fixed max-md:top-0 max-md:left-0 max-md:right-0 md:sticky md:top-0 z-10 border-b border-line px-4 max-md:h-[calc(60px+var(--safe-top))] md:h-12 max-md:pt-[var(--safe-top)] bg-paper/85 backdrop-blur-lg'
+
+/** 编辑器正文容器：移动端给固定页头让位 */
+export const EDITOR_BODY = 'flex-1 min-h-0 max-md:pt-[calc(60px+var(--safe-top))]'
+
+/** 实体名输入（18px 衬线，与 PAGE_TITLE 同档） */
+export const TITLE_INPUT =
+  'w-full bg-transparent font-serif text-lg font-semibold text-ink placeholder:text-ink-faint focus:outline-none'
+
+/** 字段行里的行内输入（零描边，占满剩余宽度） */
+export const FIELD_INPUT =
+  'min-w-0 flex-1 bg-transparent text-body leading-5 text-ink placeholder:text-ink-faint focus:outline-none'
+
+/** 年 / 月 / 日 三段输入（整组共用一条底线；事件时间与角色生日共用） */
+export const DATE_INPUT =
+  'h-6 w-14 min-w-0 bg-transparent text-body leading-5 text-ink placeholder:text-ink-faint focus:outline-none'
+
+/** 居中兜底态：空态 / 加载 / 错误（竖排、居中、gap-3） */
+export const CENTER_STATE = 'flex h-full flex-col items-center justify-center gap-3'
+
+/* ── 图标按钮 ───────────────────────────────────────── */
+export const ICON_BTN =
+  `flex h-6 w-6 shrink-0 items-center justify-center text-ink-muted transition-colors hover:bg-[var(--oc-hover)] hover:text-ink ${ROUND_CONTROL}`
+/** 页头 / 工具栏里的大图标按钮（32px）：返回、刷新、侧栏开关 */
+export const ICON_BTN_MD =
+  `flex h-8 w-8 shrink-0 items-center justify-center text-ink-muted transition-colors hover:bg-[var(--oc-hover)] hover:text-ink ${ROUND_CONTROL}`
+
+/* ── 压在画布上的浮条（地图这类整屏画布） ─────────────
+   整屏画布没有页头，控件只能**压在画面上**。皮肤只有一种：浮层底色 + 一层模糊，
+   外壳 h-8、p-1，里面的按钮 h-6（外层 6 减内边距 4 = 内层 4，同心）。
+   地图的「身份 / 控制条 / 缩放」三处都从这里取，别再各写一遍。 */
+/** 浮条皮肤（不含布局）：高度 / 内边距要自定义时与它拼 */
+export const FLOAT_SKIN = `border border-line bg-paper/85 backdrop-blur-lg float-shadow ${ROUND_CONTROL}`
+export const FLOAT_BAR = `flex h-8 items-center gap-0.5 p-1 ${FLOAT_SKIN}`
+/** 浮条里的图标按钮（24 见方） */
+export const FLOAT_BAR_ICON = `flex h-6 w-6 shrink-0 items-center justify-center text-ink-muted transition-colors hover:bg-[var(--oc-hover)] hover:text-ink ${ROUND_ITEM}`
+/** 浮条里的文字按钮（图标 + 12px 字） */
+export const FLOAT_BAR_TEXT = `flex h-6 shrink-0 items-center gap-1 px-1.5 text-caption text-ink-muted transition-colors hover:bg-[var(--oc-hover)] hover:text-ink ${ROUND_ITEM}`
+/** 竖排浮条（右下角工具栈）：与 `FLOAT_BAR` 同一皮肤，只换方向 */
+export const FLOAT_STACK = `flex flex-col gap-0.5 p-1 ${FLOAT_SKIN}`
+/** 面板内的分组小标题（比 `MENU_GROUP_LABEL` 少一级缩进，配 `p-2` 的 `PANEL`） */
+export const PANEL_GROUP_LABEL = 'px-1.5 py-1 text-micro tracking-[0.08em] text-ink-faint'
+
+/**
+ * 压在图片 / 封面上的圆形图标按钮（删除 / 移到文件夹 / 拖拽手柄 / 图片菜单）—— **唯一皮肤**。
+ *
+ * 颜色走 design skill §8 的例外：图片上的操作层允许半透明黑底 + 白字。
+ * `--oc-scrim` 是弹窗遮罩（亮色只有 .15），压在图上看不清，别拿它当图片遮罩。
+ * 移动端 44px 命中（`max-md:h-11 max-md:w-11`）。页面里的按钮仍用 `ICON_BTN` / `ICON_BTN_MD`。
+ */
+export const OVERLAY_ROUND_BTN =
+  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-black/40 text-white transition-colors hover:bg-black/60 max-md:h-11 max-md:w-11'
+
+/* ── 按钮 ─────────────────────────────────────────────
+   主按钮 = 浅底实心（**不是**实心墨色：强调色只留给「选中态」），次按钮 = 纯文字。
+   原则：一屏之内不该出现第二块深色；动作靠位置与文字表达，不靠反相。 */
+export const BTN_PRIMARY =
+  `touch-feedback flex h-8 shrink-0 items-center gap-1.5 bg-paper-card px-3 text-ui text-ink transition-colors hover:bg-line active:bg-line-hover disabled:opacity-40 ${ROUND_CONTROL}`
+/**
+ * 纯文字按钮。禁用态要显式收掉悬停：全局 `button:hover` 会给任何按钮铺底色，
+ * 光加 `opacity-40` 的话鼠标移上去仍像能点。
+ */
+export const BTN_QUIET =
+  'flex h-8 shrink-0 items-center gap-1.5 px-1.5 text-ui text-ink-muted transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-muted'
+
+/**
+ * 设置里成排的文字动作（导入 / 导出 / 检查更新 / GitHub）。
+ *
+ * 整行宽、无底色、悬停才铺一层；不要在这些地方再混 `BTN_PRIMARY` 的实心底，
+ * 同一列里一块灰底会把「动作」误读成「当前选中」。
+ */
+export const SETTINGS_ACTION_BTN =
+  'touch-feedback flex h-8 w-full items-center justify-center gap-1.5 px-3 text-ui text-ink transition-colors hover:bg-[var(--oc-hover)] active:bg-[var(--oc-hover)] disabled:cursor-not-allowed disabled:text-ink-faint disabled:hover:bg-transparent'
+
+/**
+ * 区块标题右侧的「＋ 添加」：纯文字、和标题同排，不另占一整行。
+ * 关系表 / 立绘 / 相册共用 —— 空区块只留标题行，内容出现后再撑开。
+ */
+export const ADD_ACTION =
+  'flex shrink-0 items-center gap-1 py-[3px] pr-1 text-caption text-ink-faint transition-colors hover:text-ink'
+
+/**
+ * 危险按钮 —— **全局唯一形态**：灰调实心红（`--oc-danger`）。
+ *
+ * 只给「点下去数据就没了」的确认动作：删除 / 永久删除 / 放弃未保存改动 / 清空并导入。
+ * 其余确认一律 `BTN_PRIMARY`（浅底实心），取消一律 `BTN_QUIET`，不要自编红底或描边红。
+ * 菜单行里的危险项**不套这个**：行只换文字色（`MENU_ITEM_BASE` + `text-error`，
+ * hover `bg-error-light`）—— 在菜单里铺一块红底会把「行」变成「按钮」。
+ */
+export const BTN_DANGER =
+  `touch-feedback flex h-8 shrink-0 items-center justify-center gap-1.5 bg-danger px-3 text-ui text-danger-ink transition-colors hover:bg-danger-hover disabled:opacity-40 ${ROUND_CONTROL}`
+
+/* ── 输入 ─────────────────────────────────────────────
+   零描边：静默态只留一条极淡的线，聚焦时加深。 */
+export const INPUT_LINE =
+  'w-full border-b border-line bg-transparent px-0 text-body leading-5 text-ink placeholder:text-ink-faint transition-colors focus:border-line-hover focus:outline-none'
+
+/**
+ * 行内输入：固定宽度（`w-28`），用在 `flex-wrap` 的 chip 行里。
+ * `INPUT_LINE` 是 `w-full`，放进文件夹条会把整行撑开 —— 改名 / 新建文件夹用这个。
+ */
+export const INLINE_INPUT =
+  'h-6 w-28 min-w-0 border-b border-line bg-transparent px-0 text-caption text-ink placeholder:text-ink-faint transition-colors focus:border-line-hover focus:outline-none'
+
+/**
+ * 数字输入 —— **不要用 `type="number"`**。
+ *
+ * WebView 自带的上下箭头是系统控件：暗色下是一块白底，hover / focus 也不走令牌，
+ * 和 `<datalist>` / `<input type="date">` 是同一类问题（§约束 2）。
+ * 做法：`type="text"` + `inputMode="numeric"` + 自己过滤非数字，↑/↓ 键步进。
+ * 宽度不在这里定：字段行里的宽高是 64，种子是 80 —— 调用点带一个 `w-*`。
+ */
+export const NUMBER_INPUT =
+  'h-7 shrink-0 border-b border-line bg-transparent px-0 text-right text-caption tabular-nums text-ink transition-colors focus:border-line-hover focus:outline-none'
+
+/* ── 浮层 ─────────────────────────────────────────────
+   只有浮层允许有边框；**阴影只有一档**（`FLOAT_SHADOW`，值在 globals.css 的 `--oc-shadow-float`）——
+   小、淡、两层，只用来把浮层从内容上「抬起来」；卡片 / 按钮 / 输入仍然是零阴影。
+   菜单容器**只有上下内边距**：左右不留白，行自带 px-3，hover 才能横向铺满。 */
+export const FLOAT_SHADOW = 'float-shadow'
+export const PANEL = `border border-line bg-paper/85 backdrop-blur-lg ${FLOAT_SHADOW} ${ROUND_PANEL}`
+/**
+ * 不透明面板：压在**图片 / 地图**这种花底上时用。
+ * `PANEL` 的 `bg-paper/85` 会把底图的颜色和纹理透上来 —— 看着像「遮罩失效」。
+ */
+export const PANEL_SOLID = `border border-line bg-paper ${FLOAT_SHADOW} ${ROUND_PANEL}`
+export const MENU = `border border-line bg-paper/85 backdrop-blur-lg py-1 ${FLOAT_SHADOW} ${ROUND_CONTROL}`
+/** 菜单行骨架：只含盒子与排版，不带文字色和 hover 底色（危险项 / 禁用项 / 高亮态用它）
+ *  `focus-visible:outline-none`：菜单项走键盘时靠 `data-highlighted` 的底色指示，
+ *  再叠一圈焦点圈就成了双重指示（两个高亮框同时亮）。 */
+export const MENU_ITEM_BASE =
+  `flex w-full items-center gap-2 px-3 py-1 text-left text-ui transition-colors focus-visible:outline-none ${ROUND_ITEM}`
+export const MENU_ITEM = `${MENU_ITEM_BASE} text-ink hover:bg-[var(--oc-hover)]`
+export const MENU_GROUP_LABEL = 'px-3 py-1 text-micro tracking-[0.08em] text-ink-faint'
+
+/* ── Tooltip ─────────────────────────────────────────────
+   桌面应用的悬停提示：淡入、**不缩放**、贴在触发元素下方 6px，500ms 后出现；
+   同一组按钮之间移动时立即切换（延迟由 `Tooltip.Provider` 统一给）。
+   原生 `title` 是浏览器画的（约 1 秒才出、字体底色跟系统走、暗色下可能是浅色框），
+   每个图标按钮都是一次「这是 WebView」的提醒 —— 所以图标按钮一律用 `Tip`。 */
+export const TOOLTIP =
+  `pointer-events-none border border-line bg-paper px-2 py-1 text-caption text-ink ${FLOAT_SHADOW} ${ROUND_CONTROL}`
+
+/* ── chip ─────────────────────────────────────────────
+   无描边、低对比底色；选中态反相为实心墨色。 */
+export const CHIP = `inline-flex items-center gap-1 bg-paper-alt px-2 py-[3px] text-caption text-ink-muted ${ROUND_ITEM}`
+/** chip 选中态：反相为实心墨色（只用于「选中」语义，不当按钮强调色用） */
+export const CHIP_ON = `inline-flex items-center gap-1 bg-ink px-2 py-[3px] text-caption text-paper ${ROUND_ITEM}`
+/**
+ * chip 的**编辑态**（行内改名）：退回纸面。
+ *
+ * 「选中 chip + 行内输入框」是个会吃掉字的组合：`CHIP_ON` 是反相（`bg-ink` 浅底 +
+ * `text-paper` 深字），而 `INLINE_INPUT` 写的是 `text-ink`（暗色下是浅字）——
+ * 浅字压浅底，暗色主题里就成了「看不见字」。改名时不要再反相。
+ */
+export const CHIP_EDIT = `inline-flex items-center gap-1 bg-paper-alt px-2 py-[3px] text-caption text-ink ${ROUND_ITEM}`
+
+/* ── 空态 / 加载 ───────────────────────────────────────
+   空态 = **一个图标 + 一句话 + 一个主按钮**（`BTN_PRIMARY`），整块在内容区里**横向 + 纵向居中**。
+   图标是必需品：只有一句话时分不清「还没内容」还是「加载失败」（实现见 `ListEmptyState`）。
+   要真居中，父级必须给出高度：`ListShell` 的滚动容器是 flex 列，
+   内容那一层加 `flex-1` 就会撑满可视区（见 `ListShell` 顶部注释）。
+   动作不许再写成可点的衬线小字（`EMPTY_HINT` 只留给侧栏 / 卡片里的行内入口）。 */
+export const EMPTY_STATE = 'flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center'
+export const LOADING_TEXT = 'text-ui text-ink-faint'
+
+/* ── 列表页（网格 / 搜索） ─────────────────────────────
+   列表页的列数只在这一处定义：角色 / 事件 / 国家三张列表共用。 */
+export const LIST_GRID = 'grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
+/** 列表页页头里的搜索框（左侧给搜索图标留 pl-8） */
+export const SEARCH_INPUT =
+  'h-8 w-44 border-b border-transparent bg-transparent pl-8 pr-2 text-ui text-ink placeholder:text-ink-faint transition-colors focus:border-line-hover focus:outline-none'
+/** 搜索图标：绝对定位在输入框左侧 */
+export const SEARCH_ICON = 'pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint'
+
+/* ── 封面卡（角色 / 国家 / 事件的网格视图） ─────────────
+   版式照搬 Simple_Cover：照片贴顶、下缘渐进模糊溶进色块，标题压在模糊区上，
+   简介与小字落在色块里。
+   比例 / 边距 / 字号全部来自 `lib/cover/tuning.ts`（视图菜单里可实时拖），
+   这里只留「画什么色、怎么截断」这类不随手调的。 */
+// 圆角用 clip-path 而不是 `overflow: hidden`：卡片被 transform 提层时，
+// overflow+radius 在 WebKit 里会漏 1–2px 透明（黑角）；clip-path 由合成器裁，稳定。
+export const COVER_FRAME = `relative w-full bg-paper-card ${ROUND_ITEM} [clip-path:inset(0_round_var(--radius-item))]`
+export const COVER_TEXT = 'absolute'
+export const COVER_TITLE =
+  'line-clamp-2 font-serif font-semibold leading-[1.14] tracking-[0.012em] text-paper-fixed [overflow-wrap:anywhere]'
+export const COVER_INTRO =
+  'mt-[0.8em] line-clamp-2 leading-[1.7] tracking-[0.035em] text-paper-fixed/80'
+/** 标题下面那行小字（国籍 / 时间）：和标题同一个「左右布局」里，标题右下方 */
+export const COVER_SUBTITLE = 'mt-0.5 truncate leading-[1.4] tracking-[0.12em] text-paper-fixed/60'
+
+/*
+ * 黑白模式：块色跟着主题走（亮色主题是纸色、暗色主题才是墨色），
+ * 所以文字也要跟着主题翻 —— 用 `text-ink` 一族，不要用 `*-fixed`。
+ */
+export const COVER_TITLE_MONO =
+  'line-clamp-2 font-serif font-semibold leading-[1.14] tracking-[0.012em] text-ink [overflow-wrap:anywhere]'
+export const COVER_INTRO_MONO =
+  'mt-[0.8em] line-clamp-2 leading-[1.7] tracking-[0.035em] text-ink-muted'
+export const COVER_SUBTITLE_MONO = 'mt-0.5 truncate leading-[1.4] tracking-[0.12em] text-ink-faint'
+
+/* ── 素材卡片（列表卡片 / 画廊格子的图区） ───────────── */
+/** 图区外框：固定比例 + 卡片底色（图加载前就是这块底色） */
+export const MEDIA_CARD = 'relative aspect-[3/2] w-full bg-paper-card'
+/** 图片本身的填充方式 */
+export const MEDIA_IMG = 'absolute inset-0 h-full w-full object-cover'
+/** 图底部的渐变过渡：避免图片与卡片底色之间出现硬边 */
+export const MEDIA_GRADIENT =
+  'pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-paper-card to-transparent'
+/** 无图占位：衬线首字，不用图形图标 */
+export const MEDIA_FALLBACK = 'absolute inset-0 grid place-items-center font-serif text-2xl text-ink-faint'
+
+/* ── 窗口控制按钮（Windows / Linux 自绘标题栏） ─────────
+   系统标题栏的按钮是 46×32、**贴死窗口右上角**、方角（贴边整条 → `rounded-none`）。
+   字形是系统画的那四个方框字形（`components/layout/window-glyphs.tsx`），不是 lucide。 */
+export const WINDOW_BTN =
+  'flex h-8 w-[46px] items-center justify-center rounded-none text-ink-muted transition-colors hover:bg-[var(--oc-hover)] hover:text-ink'
+/** 关闭：悬停实心红 + 纸色图标。**唯一一处该打破「界面无色」的地方** —— 用户靠这块红确认「关的是窗口」。 */
+export const WINDOW_BTN_CLOSE = 'flex h-8 w-[46px] items-center justify-center rounded-none text-ink-muted transition-colors hover:bg-[#C42B1C] hover:text-paper-fixed active:bg-[#B22A1C]' // design-audit-allow raw-hex Windows 系统关闭色（#C42B1C 悬停 / #B22A1C 按下）：用户靠这块红确认关的是窗口
+
+/* ── 列表行 / 移动端筛选条 ───────────────────────────── */
+/**
+ * 列表行 / 卡片的**选中态**：比悬停多一圈内线。
+ *
+ * 只加深底色是不够的 —— 悬停和选中会看着是同一件事（鼠标停在哪一行、选中了哪几行分不清）。
+ * 内线用 `box-shadow: inset` 而不是 `border`：border 会把行撑大 2px，整列跟着跳；
+ * 它也不是「浮层的阴影」，所以不受 `shadow-literal` 那条规则约束。
+ */
+export const ROW_SELECTED = 'bg-[var(--oc-hover)] [box-shadow:inset_0_0_0_1px_var(--oc-line-hover)]'
+/** 列表行右侧的动作组（悬停才出现，纵向居中） */
+export const ROW_ACTIONS = 'absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100'
+/** 空态里那句「点这里去建一个」的衬线提示 */
+export const EMPTY_HINT = 'font-serif text-body leading-5 text-ink-faint transition-colors hover:text-ink'
+/** 移动端筛选条右侧的新建按钮 */
+export const MOBILE_FILTER_BTN =
+  'touch-feedback flex items-center gap-1 bg-paper/85 px-2 py-1 text-micro text-ink-muted backdrop-blur transition-colors hover:text-ink'
+
+/** 筛选 / 排序下拉的触发按钮（桌面 h-8，移动端 h-7；宽度由内容决定） */
+export const FILTER_TRIGGER =
+  'touch-feedback flex h-7 shrink-0 items-center gap-1 whitespace-nowrap px-2 text-micro text-ink transition-colors hover:bg-[var(--oc-hover)] active:bg-[var(--oc-hover)] md:h-8 md:px-3 md:text-ui'
+
+/* ── 拖拽排序 ─────────────────────────────────────────
+   手柄位置只有两种：卡片压在图左上角、列表行在左侧留白里。
+   位置定在这里，卡片 / 行只管渲染 DragHandle。
+   卡片上的手柄默认隐身、悬停（或键盘聚焦）才出现 —— 它不承载信息，
+   只是起拖的抓手；常显会在每张图的左上角一直压一个黑圆点。
+   移动端整块不渲染：那里靠长按起拖（`SortableList activation="longPress"`），
+   一个 44px 的隐形命中区反而容易误触。 */
+export const DRAG_SLOT_CARD =
+  'absolute left-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-md:hidden'
+export const DRAG_SLOT_ROW = 'absolute left-2 top-1/2 -translate-y-1/2'
+
+/* ── 关系图节点 ──────────────────────────────────────── */
+/** 节点外壳：图标在上、名字在下的竖排 */
+export const NODE_WRAPPER = 'flex flex-col items-center gap-1 group cursor-pointer'
+/**
+ * 节点的连线手柄：四向小圆点（Loose 模式，任一端都能起手）。桌面悬停节点才显形，移动端常显。
+ *
+ * ⚠️ `z-10` 不能删：手柄的圆心正好落在节点边界上，**里侧半个圆和节点内容（头像 / 卡片 / 名字）
+ * 重叠**。两者都是定位元素、z-index 都是 auto，按 DOM 顺序内容在后 → 盖住手柄里侧那一半，
+ * 按在圆点中间就变成拖节点而不是拉线（「从圆点连不了线，只能移动节点」）。
+ * 抬到手柄这一层以后：按圆点 = 拉线，按内容 = 选 / 拖节点，互不抢。
+ */
+export const NODE_HANDLE =
+  'z-10 !h-3 !w-3 max-md:!h-4 max-md:!w-4 !rounded-full !border !border-line !bg-paper opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 hover:!bg-paper-card [&.valid]:!bg-ink-muted [&.valid]:opacity-100'

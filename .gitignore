@@ -1,0 +1,131 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+#开发文档（公开：设计文档 / 待办 / agent 约定）
+# docs/ 与 todo.md / AGENTS.md / CLAUDE.md 已纳入版本管理
+
+# 构建产物
+.next/
+out/
+
+# 依赖文件
+node_modules/
+
+# Tauri 构建产物
+src-tauri/target/
+
+# Android 构建产物
+android/app/release/
+
+# 环境变量
+.env
+.env.local
+.env.production
+
+# TypeScript 编译缓存
+tsconfig.tsbuildinfo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# 临时浏览器配置（Tailwind 自动扫描会读非 ignore 文件，浏览器 profile 有几百 MB 二进制）
+/.tmp-edge*/
+
+# 本地验证产物（截图 / 下载 / 一次性 CDP 脚本），不进仓库
+/tmp/
+
+# 编辑器配置
+.vscode/
+.vs/
+
+# .opencode：只公开 skills（agent 约定文档），依赖与本地状态不公开
+/.opencode/*
+!/.opencode/skills/
+opencode.json
+.claude/
+
+# Android IDE
+android/.idea/
+
+# 应用图标源文件（生成产物在 src-tauri/icons/ 中）
+app-icon.png
+
+# MSIX 打包产物
+*.msix
+*.msixupload
+*.appx
+MSIX_Package/
+
+# 设计参考 demo（三栏编辑原型），不随产品提交
+sample/
+
+# PR #5 拆解清单：临时工作文档，含他人联系信息，不进仓库
+docs/PR5-拆解清单.md
+
+# 桌面壳调试日志
+logs/
+
+# Android 构建缓存 / 产物（Tailwind 自动扫描会读非 ignore 文件，别把二进制和压缩产物扫进去）
+/android/.gradle/
+/android/app/build/
+/android/app/src/main/assets/public/
+/.tmp*/
+
+# 本地审查留档（审查报告 / 证据 / metrics / 探针与 audit 日志）与执行 prompt：
+# 都是工作产物，不是产品文档 —— 留在本地按需查看，不进仓库
+docs/review-*/
+docs/*-执行prompt.md
+# ── Android 移植：签名与本地环境（绝不提交） ──
+*.keystore
+*.jks
+release.keystore
+android/local.properties
+.android/
+*.apk
+*.aab
+_wtest.txt
+# 本地推送脚本（不属于产品代码）
+push-to-github.cmd
+push-to-github.ps1
