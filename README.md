@@ -1,5 +1,9 @@
 # OC Studio · Android
 
+[![build-apk](https://github.com/Motem-ture/oc-studio-android/actions/workflows/build-apk.yml/badge.svg)](https://github.com/Motem-ture/oc-studio-android/actions/workflows/build-apk.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Motem-ture/oc-studio-android?include_prereleases&label=release)](https://github.com/Motem-ture/oc-studio-android/releases)
+
 > [!IMPORTANT]
 > **此项目仅作移植参考，将不会继续更新，用户可自行拿来自主更新（fork 后自维护）。**
 > 上游 [OC Studio](https://github.com/Pokanshuu/OC-Studio) 仍在更新，功能与修复请以上游为准；
