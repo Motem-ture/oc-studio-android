@@ -48,12 +48,22 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
+      # ubuntu-latest 镜像自带 Android SDK（cmdline-tools + 若干 platform）。
+      # 不用 android-actions/setup-android：它在部分镜像上会失败，且我们只需要补装两个包。
+      - name: Prepare Android SDK
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDK="$(dirname "$(dirname "$(command -v sdkmanager)")")/.."
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --list_installed | head -20
 
       - name: Assemble release
         working-directory: android
@@ -83,6 +93,7 @@ jobs:
 
           if [ -z "${KEYSTORE_BASE64:-}" ] || [ "${FORCE_UNSIGNED:-false}" = "true" ]; then
             echo "没有签名 Secrets（或是强制未签名）：输出未签名包"
+            OUT="OC-Studio-android-unsigned.apk"
             cp aligned.apk "$OUT"
             echo "UNSIGNED=1" >> "$GITHUB_ENV"
           else
@@ -116,5 +127,5 @@ jobs:
             仅作移植参考的构建产物，不承诺后续更新。
 
             - 版本：${{ github.ref_name }}
-            - 签名：${{ env.UNSIGNED == '1' && '未签名（需自行 apksigner 签名后才能安装）' || '已签名' }}
+            - 文件名里带 `unsigned` 表示未签名（安装前需自行签名），否则为已签名包
             - 许可：MIT（上游 © Pokanshu, nekibud）
